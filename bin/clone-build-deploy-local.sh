@@ -43,6 +43,7 @@ cd "$APP_DIR"
 
 BUNDLE_PATH="$APP_DIR/vendor/bundle-mri" bundle exec ruby bin/verify-routes
 BUNDLE_PATH="$APP_DIR/vendor/bundle-truffleruby" \
+  BUNDLE_WITHOUT=rails \
   ORES_BUILD_TARGET=lambda \
   ORES_LAMBDA_HANDLER_GRANULARITY=route \
   truffleruby -S bundle exec truffleruby bin/build-runtime
