@@ -62,7 +62,7 @@ module OresGraal
       @route = route
       @pool_key = OresApp::Routes.handler_relative_path(route)
       @context_id = "#{route.name}-#{slot}"
-      @host_http_bridge = host_http_bridge
+      @host_http_bridge = host_http_bridge.respond_to?(:call) ? host_http_bridge.method(:call) : host_http_bridge
       @jobs = Queue.new
       @ready = Queue.new
       @thread = Thread.new { run }
