@@ -27,11 +27,17 @@ module OresApp
     end
 
     def health(request)
+      execution_mode = if defined?(ORES_EXECUTION_MODE)
+        ORES_EXECUTION_MODE
+      else
+        ENV.fetch("ORES_BUILD_TARGET", "rails")
+      end
+
       response(200, {
         ok: true,
         service: "ores-ror.rb",
         runtime: HttpDatabase.runtime_name,
-        execution_mode: ENV.fetch("ORES_BUILD_TARGET", "rails"),
+        execution_mode: execution_mode,
         request_id: request["request_id"]
       })
     end
