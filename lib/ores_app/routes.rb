@@ -31,7 +31,7 @@ module OresApp
         router.public_send(
           route.verb.downcase,
           route.path,
-          to: "resources#dispatch",
+          to: "resources#handle",
           defaults: { ores_handler: route.handler },
           as: route.name.to_sym
         )
