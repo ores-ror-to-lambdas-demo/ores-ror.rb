@@ -141,6 +141,8 @@ jobs:
           bundle exec ruby bin/build-runtime
       - name: Prove two inner contexts do not share Ruby global state
         run: bundle exec truffleruby --jvm graal/context_isolation_smoke.rb
+      - name: Prove inner context can call an outer host Method bridge
+        run: bundle exec truffleruby --jvm graal/context_bridge_smoke.rb
       - name: Boot one Graal host process with per-handler context pools
         run: |
           bundle exec truffleruby --jvm graal/server.rb >graal-cluster.log 2>&1 &
