@@ -37,7 +37,7 @@ module OresApp
     end
 
     def execution_mode
-      return "lambda" if defined?(ORES_GRAAL_RUNTIME) && ORES_GRAAL_RUNTIME
+      return "graal" if defined?(ORES_GRAAL_RUNTIME) && ORES_GRAAL_RUNTIME
 
       ENV.fetch("ORES_BUILD_TARGET", "rails")
     end
