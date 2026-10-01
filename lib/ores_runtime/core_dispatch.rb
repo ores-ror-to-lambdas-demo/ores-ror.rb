@@ -1,5 +1,4 @@
 require "json"
-require "uri"
 
 module OresRuntime
   module CoreDispatch
@@ -66,11 +65,16 @@ module OresRuntime
     def parse_query(query_string)
       return {} if query_string.to_s.empty?
 
-      URI.decode_www_form(query_string.to_s).each_with_object({}) do |(key, value), result|
-        result[key] = value
+      query_string.to_s.split("&").each_with_object({}) do |pair, result|
+        key, value = pair.split("=", 2)
+        result[decode_form_component(key)] = decode_form_component(value.to_s)
       end
-    rescue ArgumentError => error
-      raise BadRequest, "invalid query string: #{error.message}"
+    end
+
+    def decode_form_component(value)
+      text = value.to_s.tr("+", " ")
+      raise BadRequest, "invalid percent encoding" if text.match?(/%(?![0-9A-Fa-f]{2})/)
+      text.gsub(/%([0-9A-Fa-f]{2})/) { [Regexp.last_match(1).to_i(16)].pack("C") }.force_encoding(Encoding::UTF_8)
     end
 
     def parse_body(body)

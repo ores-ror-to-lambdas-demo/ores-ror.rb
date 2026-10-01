@@ -1,5 +1,4 @@
 require "json"
-require "uri"
 
 class HttpDatabase
   class Error < StandardError; end
@@ -37,6 +36,7 @@ class HttpDatabase
   unless GRAAL_RUNTIME
     require "connection_pool"
     require "net/http"
+    require "uri"
 
     class Session
       def initialize(base_url:, token:)
