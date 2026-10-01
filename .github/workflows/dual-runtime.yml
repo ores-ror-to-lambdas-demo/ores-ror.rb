@@ -57,3 +57,41 @@ jobs:
           kill $(cat rails.pid)
       - if: failure()
         run: cat rails-truffle.log || true
+
+  truffleruby-aws-lambda:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build Lambda image from official TruffleRuby standalone
+        run: docker build --platform linux/amd64 -f aws-lambda/Dockerfile -t ores-ror-truffleruby-lambda:test .
+      - name: Install AWS Lambda Runtime Interface Emulator
+        run: |
+          curl --fail --location --output aws-lambda-rie \
+            https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/latest/download/aws-lambda-rie
+          chmod +x aws-lambda-rie
+      - name: Boot Lambda runtime locally and invoke Rails health route
+        run: |
+          docker run --rm -d --name ores-ror-lambda \
+            -p 9000:8080 \
+            -e SECRET_KEY_BASE_DUMMY=1 \
+            -v "$PWD/aws-lambda-rie:/aws-lambda-rie:ro" \
+            --entrypoint /aws-lambda-rie \
+            ores-ror-truffleruby-lambda:test /var/runtime/bootstrap
+          for n in $(seq 1 60); do
+            if curl --fail --silent \
+              -H 'content-type: application/json' \
+              -d @aws-lambda/event-v2.json \
+              http://127.0.0.1:9000/2015-03-31/functions/function/invocations >lambda-response.json; then
+              break
+            fi
+            sleep 1
+          done
+          cat lambda-response.json
+          grep -q '"statusCode":200' lambda-response.json
+          grep -q 'truffleruby' lambda-response.json
+      - name: Show Lambda container log on failure
+        if: failure()
+        run: docker logs ores-ror-lambda || true
+      - name: Stop Lambda container
+        if: always()
+        run: docker rm -f ores-ror-lambda >/dev/null 2>&1 || true
