@@ -62,9 +62,9 @@ jobs:
   lambda-route-codegen:
     runs-on: ubuntu-latest
     env:
+      BUNDLE_WITHOUT: rails
       ORES_BUILD_TARGET: lambda
       ORES_LAMBDA_HANDLER_GRANULARITY: route
-      RAILS_ENV: test
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
@@ -79,7 +79,8 @@ jobs:
           test -f app/controllers/profiles/preferences/show/endpoint_controller.rb
           test ! -e app/controllers/users/show/handler.rb
           test -z "$(git ls-files ':(glob)app/controllers/**/handler.rb')"
-      - run: bundle exec ruby bin/build-runtime
+      - run: ruby -e 'abort "Rails gem present" unless Gem::Specification.find_all_by_name("rails").empty?'
+      - run: ruby bin/build-runtime
       - name: Verify co-located generated handlers and Lambda manifest
         run: |
           test -f app/controllers/users/show/handler.rb
@@ -92,33 +93,33 @@ jobs:
           grep -Fq 'CONTROLLER_CLASS = "Users::Show::EndpointController"' app/controllers/users/show/handler.rb
           grep -Fq 'ACTION = "show"' app/controllers/users/show/handler.rb
           grep -Fq 'VIEW_LOGICAL_PATH = "users/show/endpoint/show"' app/controllers/users/show/handler.rb
-          grep -Fq 'def rails_rack(env)' app/controllers/users/show/handler.rb
+          grep -Fq 'CONTROLLER_FILE = "app/controllers/users/show/endpoint_controller.rb"' app/controllers/users/show/handler.rb
           grep -Fq '"handler_constant": "Users::Show::Handler"' generated/lambda/manifest.json
-          bundle exec rails runner 'Rails.application.eager_load!; abort "generated handler not Zeitwerk-loadable" unless defined?(Users::Show::Handler)'
           grep -Fq '"handler_granularity": "route"' generated/lambda/manifest.json
-          grep -Fq '"route_source": "Rails.application.routes"' generated/lambda/manifest.json
+          grep -Fq '"route_source": "config/routes.rb:static-ripper"' generated/lambda/manifest.json
           grep -Fq '"handler_path": "app/controllers/users/show/handler.rb"' generated/lambda/manifest.json
           grep -Fq '"controller": "users/show/endpoint"' generated/lambda/manifest.json
           grep -Fq '"action": "show"' generated/lambda/manifest.json
-          ! find generated/lambda -name '*.rb' -print0 | xargs -0 grep -E 'config/environment|Rails\.application'
-          ! find app/controllers -name handler.rb -print0 | xargs -0 grep -E 'config/environment|Rails\.application'
+          ! find generated/lambda -name '*.rb' -print0 | xargs -0 grep -E 'config/environment|Rails\.application|defined\?\(Rails\)'
+          ! find app/controllers -name handler.rb -print0 | xargs -0 grep -E 'config/environment|Rails\.application|defined\?\(Rails\)'
           test -z "$(git status --porcelain --untracked-files=all -- generated/ app/controllers/)"
-      - run: BUNDLE_WITHOUT=rails bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
-      - run: BUNDLE_WITHOUT=rails bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
+      - run: bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
+      - run: bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
 
   lambda-group-codegen:
     runs-on: ubuntu-latest
     env:
+      BUNDLE_WITHOUT: rails
       ORES_BUILD_TARGET: lambda
       ORES_LAMBDA_HANDLER_GRANULARITY: group
-      RAILS_ENV: test
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.4'
           bundler-cache: true
-      - run: bundle exec ruby bin/build-runtime
+      - run: ruby -e 'abort "Rails gem present" unless Gem::Specification.find_all_by_name("rails").empty?'
+      - run: ruby bin/build-runtime
       - name: Verify grouped dispatch build
         run: |
           grep -q '"handler_granularity": "group"' generated/lambda/manifest.json
@@ -127,9 +128,9 @@ jobs:
           grep -q 'Orders::Show::Handler' generated/lambda/groups/orders/handler.rb
           test -f app/controllers/orders/show/handler.rb
           git check-ignore -q app/controllers/orders/show/handler.rb
-          ! find generated/lambda -name '*.rb' -print0 | xargs -0 grep -E 'config/environment|Rails\.application'
-      - run: BUNDLE_WITHOUT=rails bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
-      - run: BUNDLE_WITHOUT=rails bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
+          ! find generated/lambda -name '*.rb' -print0 | xargs -0 grep -E 'config/environment|Rails\.application|defined\?\(Rails\)'
+      - run: bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
+      - run: bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
 
   truffleruby-aws-lambda:
     runs-on: ubuntu-latest
