@@ -30,22 +30,6 @@ RUN set -eux; \
 ENV PATH=/opt/truffleruby/bin:${PATH}
 WORKDIR /var/task
 
-FROM truffleruby-base AS codegen
-
-ENV BUNDLE_PATH=/opt/codegen-bundle \
-    BUNDLE_GEMFILE=/src/Gemfile \
-    RAILS_ENV=test \
-    ORES_BUILD_TARGET=lambda
-
-WORKDIR /src
-COPY Gemfile ./Gemfile
-RUN bundle install --jobs 4 --retry 3
-COPY . /src
-RUN bundle exec ruby bin/build-runtime \
-    && test -f generated/lambda/manifest.json \
-    && test -f generated/lambda/entrypoint.rb \
-    && test -f app/controllers/users/show/handler.rb
-
 FROM truffleruby-base AS runtime
 
 ENV BUNDLE_PATH=/opt/ores-ror-bundle \
@@ -53,16 +37,17 @@ ENV BUNDLE_PATH=/opt/ores-ror-bundle \
     BUNDLE_WITHOUT=rails:test \
     ORES_BUILD_TARGET=lambda
 
-WORKDIR /var/task
 COPY Gemfile ./Gemfile
-RUN bundle install --jobs 4 --retry 3
-COPY . /var/task
-COPY --from=codegen /src/generated /var/task/generated
-COPY --from=codegen /src/app/controllers /var/task/app/controllers
+RUN bundle install --jobs 4 --retry 3 \
+    && truffleruby -e 'abort "rails gem present" unless Gem::Specification.find_all_by_name("rails").empty?'
 
-RUN test -f generated/lambda/manifest.json \
+COPY . /var/task
+
+RUN truffleruby bin/build-runtime \
+    && test -f generated/lambda/manifest.json \
     && test -f generated/lambda/entrypoint.rb \
     && test -f app/controllers/users/show/handler.rb \
+    && ! grep -R -E 'config/environment|Rails\.application|defined\?\(Rails\)' generated/lambda app/controllers/*/*/handler.rb \
     && mkdir -p /var/runtime \
     && cp /var/task/aws-lambda/bootstrap /var/runtime/bootstrap \
     && chmod 0755 /var/runtime/bootstrap
