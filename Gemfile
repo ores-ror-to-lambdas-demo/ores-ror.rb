@@ -8,3 +8,7 @@ group :rails do
   gem "rails", "~> 8.1"
   gem "puma", ">= 6.0", require: false
 end
+
+group :test do
+  gem "minitest", "~> 5.25"
+end
