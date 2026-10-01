@@ -87,6 +87,9 @@ jobs:
           test -f app/controllers/profiles/preferences/show/handler.rb
           test "$(find app/controllers -name handler.rb | wc -l)" -eq 13
           git check-ignore -q app/controllers/users/show/handler.rb
+          grep -Fq 'module Handler' app/controllers/users/show/handler.rb
+          grep -Fq '"handler_constant": "Users::Show::Handler"' generated/lambda/manifest.json
+          bundle exec rails runner 'Rails.application.eager_load!; abort "generated handler not Zeitwerk-loadable" unless defined?(Users::Show::Handler)'
           grep -Fq '"handler_granularity": "route"' generated/lambda/manifest.json
           grep -Fq '"route_source": "Rails.application.routes"' generated/lambda/manifest.json
           grep -Fq '"handler_path": "app/controllers/users/show/handler.rb"' generated/lambda/manifest.json
@@ -116,7 +119,7 @@ jobs:
           grep -q '"handler_granularity": "group"' generated/lambda/manifest.json
           grep -q 'case route.group' generated/lambda/entrypoint.rb
           grep -q 'OresGenerated::Groups::Orders' generated/lambda/entrypoint.rb
-          grep -q 'OresGenerated::EndpointHandlers::Order' generated/lambda/groups/orders/handler.rb
+          grep -q 'Orders::Show::Handler' generated/lambda/groups/orders/handler.rb
           test -f app/controllers/orders/show/handler.rb
           git check-ignore -q app/controllers/orders/show/handler.rb
           ! find generated/lambda -name '*.rb' -print0 | xargs -0 grep -E 'config/environment|Rails\.application'
