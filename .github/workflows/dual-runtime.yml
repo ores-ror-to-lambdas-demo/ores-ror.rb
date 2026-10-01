@@ -143,6 +143,8 @@ jobs:
         run: bundle exec truffleruby --jvm graal/context_isolation_smoke.rb
       - name: Prove inner context can call an outer host Method bridge
         run: bundle exec truffleruby --jvm graal/context_bridge_smoke.rb
+      - name: Prove one concrete handler executes directly in its context worker
+        run: bundle exec truffleruby --jvm graal/worker_health_smoke.rb
       - name: Boot one Graal host process with per-handler context pools
         run: |
           bundle exec truffleruby --jvm graal/server.rb >graal-cluster.log 2>&1 &
