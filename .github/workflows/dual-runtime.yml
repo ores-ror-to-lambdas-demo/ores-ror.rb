@@ -89,7 +89,8 @@ jobs:
           git check-ignore -q app/controllers/users/show/handler.rb
           grep -Fq '"handler_granularity": "route"' generated/lambda/manifest.json
           grep -Fq '"generated_handler": "app/controllers/users/show/handler.rb"' generated/lambda/manifest.json
-          ! grep -R -E 'config/environment|Rails\.application' generated/lambda app/controllers/*/*/handler.rb
+          ! grep -R -E 'config/environment|Rails\.application' generated/lambda
+          ! find app/controllers -name handler.rb -print0 | xargs -0 grep -E 'config/environment|Rails\.application'
           test -z "$(git status --porcelain --untracked-files=all -- generated/ app/controllers/)"
       - run: bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
       - run: bundle exec ruby lambda-test/aws_lambda_adapter_test.rb

@@ -62,7 +62,7 @@ def write_group_handler(lambda_dir, group, routes)
             case route.name
             #{cases}
             else
-              raise ArgumentError, "route #{route.name.inspect} does not belong to group #{group}"
+              raise ArgumentError, "route \#{route.name.inspect} does not belong to group #{group}"
             end
           end
         end
@@ -85,7 +85,7 @@ def write_entrypoint(root, lambda_dir, granularity, routes)
         case route.name
         #{cases}
         else
-          raise ArgumentError, "no generated endpoint handler for #{route.name.inspect}"
+          raise ArgumentError, "no generated endpoint handler for \#{route.name.inspect}"
         end
       end
     RUBY
@@ -101,7 +101,7 @@ def write_entrypoint(root, lambda_dir, granularity, routes)
         case route.group
         #{cases}
         else
-          raise ArgumentError, "no generated group handler for #{route.group.inspect}"
+          raise ArgumentError, "no generated group handler for \#{route.group.inspect}"
         end
       end
     RUBY

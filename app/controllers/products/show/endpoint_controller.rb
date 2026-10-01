@@ -1,1 +1,15 @@
-# frozen_string_literal: true\n\nmodule Products\n  module Show\n    class EndpointController < OresEndpointController\n      ORES_ROUTE_NAME = "product".freeze\n\n      prepend_view_path __dir__ if respond_to?(:prepend_view_path)\n\n      def call\n        dispatch_ores_endpoint(expected_route_name: ORES_ROUTE_NAME)\n      end\n    end\n  end\nend\n
+# frozen_string_literal: true
+
+module Products
+  module Show
+    class EndpointController < OresEndpointController
+      ORES_ROUTE_NAME = "product".freeze
+
+      prepend_view_path __dir__ if respond_to?(:prepend_view_path)
+
+      def call
+        dispatch_ores_endpoint(expected_route_name: ORES_ROUTE_NAME)
+      end
+    end
+  end
+end
