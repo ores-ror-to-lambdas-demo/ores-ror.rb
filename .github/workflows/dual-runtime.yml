@@ -148,7 +148,7 @@ jobs:
           require "json"
           require "thread"
 
-          ORES_GS_HTTP = lambda do |payload|
+          ores_gs_http = lambda do |payload|
             request = JSON.parse(payload.to_s)
             JSON.generate("ok" => true, "status" => 200, "body" => JSON.generate("target" => request.fetch("path")))
           end
