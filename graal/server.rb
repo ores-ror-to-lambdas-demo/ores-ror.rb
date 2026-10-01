@@ -63,6 +63,7 @@ module OresGraal
                  end
       write_response(socket, response)
     rescue StandardError => error
+      warn error.full_message(highlight: false, order: :top)
       write_response(socket, {
         "status" => 500,
         "headers" => { "content-type" => "application/json; charset=utf-8" },
