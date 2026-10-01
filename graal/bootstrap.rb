@@ -2,8 +2,9 @@
 # Appended to generated/graal/handler.rb by bin/build-runtime.
 # The generated bundle is evaluated exactly once per long-lived Graal Context.
 
-raise "Graal host did not bind ores_gs_http" unless defined?(ores_gs_http)
-ORES_GS_HTTP = ores_gs_http unless defined?(ORES_GS_HTTP)
+if defined?(ores_gs_http) && !defined?(ORES_GS_HTTP)
+  ORES_GS_HTTP = ores_gs_http
+end
 
 module OresGenerated
   module GraalEntrypoint
@@ -24,8 +25,24 @@ module OresGenerated
 end
 
 def ores_graal_invoke(request_json)
+  raise "Graal host HTTP capability is unavailable" unless defined?(ORES_GS_HTTP)
+
   request = JSON.parse(request_json.to_s)
   JSON.generate(OresGenerated::GraalEntrypoint.call(request))
 end
 
-method(:ores_graal_invoke)
+request_invoker = method(:ores_graal_invoke)
+
+# Embedded Java seeds ores_gs_http before this source is evaluated, so normal
+# production execution takes the String branch directly. The capability branch
+# exists for standalone smoke tests and alternate hosts that prefer an explicit
+# one-time setup call after evaluation.
+->(*args) do
+  if args.length == 1 && args.first.is_a?(String)
+    request_invoker.call(args.first)
+  else
+    http_capability = args.fetch(0)
+    Object.const_set(:ORES_GS_HTTP, http_capability) unless defined?(ORES_GS_HTTP)
+    request_invoker
+  end
+end
