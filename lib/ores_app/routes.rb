@@ -6,7 +6,7 @@ module OresApp
   module Routes
     Route = Struct.new(
       :verb, :path, :name, :controller, :action, :middleware, :group, :pool,
-      :handler_path, :view_logical_path, :view_files,
+      :handler_path, :handler_constant, :view_logical_path, :view_files,
       keyword_init: true
     )
 
