@@ -40,4 +40,15 @@ class RoutesTest < ActionDispatch::IntegrationTest
     expected = OresApp::Routes::TABLE.map { |route| OresApp::Routes.handler_relative_path(route) }.sort
     assert_equal expected, OresApp::Routes.filesystem_handler_paths
   end
+
+  test "Rails routes resolve to conventional controller actions" do
+    OresApp::Routes::TABLE.each do |route|
+      concrete_path = route.path.gsub(/:([A-Za-z0-9_]+)/, "demo")
+      params = Rails.application.routes.recognize_path(concrete_path, method: route.verb.downcase.to_sym)
+
+      assert_equal route.controller, params.fetch(:controller), "wrong controller for #{route.verb} #{route.path}"
+      assert_equal route.action, params.fetch(:action), "wrong action for #{route.verb} #{route.path}"
+      assert File.file?(File.join(OresApp::Routes.root_path, OresApp::Routes.rails_controller_relative_path(route)))
+    end
+  end
 end
