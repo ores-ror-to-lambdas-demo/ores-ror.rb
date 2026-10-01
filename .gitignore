@@ -6,4 +6,5 @@
 /vendor/bundle
 /vendor/bundle-*
 /generated/
+/app/controllers/**/handler.rb
 .env
