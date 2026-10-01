@@ -40,7 +40,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
         with:
-          ruby-version: truffleruby+graalvm-25.0.0
+          ruby-version: truffleruby+graalvm-34.0.1
           bundler-cache: true
       - run: ruby -v
       - run: bundle exec rails test
@@ -62,8 +62,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build Lambda image from official TruffleRuby standalone
+      - name: Build Lambda image with TruffleRuby 34.x native standalone
         run: docker build --platform linux/amd64 -f aws-lambda/Dockerfile -t ores-ror-truffleruby-lambda:test .
+      - name: Verify container runtime line
+        run: docker run --rm --entrypoint truffleruby ores-ror-truffleruby-lambda:test --version | tee truffleruby-version.txt
       - name: Install AWS Lambda Runtime Interface Emulator
         run: |
           curl --fail --location --output aws-lambda-rie \
