@@ -71,25 +71,26 @@ jobs:
         with:
           ruby-version: '3.4'
           bundler-cache: true
-      - name: Verify committed filesystem route tree
+      - name: Verify tracked Rails endpoint directories
         run: |
-          test -f 'routes/users/[id]/handler.rb'
-          test -f 'routes/orders/[id]/handler.rb'
-          test -f 'routes/orders/[id]/cancel/handler.rb'
-          test -f 'routes/profiles/[id]/preferences/handler.rb'
-          test "$(find routes -name handler.rb | wc -l)" -eq 13
+          test -f app/controllers/users/show/endpoint_controller.rb
+          test -f app/controllers/orders/show/endpoint_controller.rb
+          test -f app/controllers/orders/cancel/endpoint_controller.rb
+          test -f app/controllers/profiles/preferences/show/endpoint_controller.rb
+          test ! -e app/controllers/users/show/handler.rb
       - run: ruby bin/build-runtime
-      - name: Verify URL-shaped generated route and grouped handler artifacts
+      - name: Verify co-located generated handlers and Lambda manifest
         run: |
-          test -f 'generated/lambda/routes/users/[id]/handler.rb'
-          test -f 'generated/lambda/routes/orders/[id]/handler.rb'
-          test -f 'generated/lambda/routes/orders/[id]/cancel/handler.rb'
-          test -f generated/lambda/groups/users/handler.rb
-          test -f generated/lambda/groups/orders/handler.rb
+          test -f app/controllers/users/show/handler.rb
+          test -f app/controllers/orders/show/handler.rb
+          test -f app/controllers/orders/cancel/handler.rb
+          test -f app/controllers/profiles/preferences/show/handler.rb
+          test "$(find app/controllers -name handler.rb | wc -l)" -eq 13
+          git check-ignore -q app/controllers/users/show/handler.rb
           grep -Fq '"handler_granularity": "route"' generated/lambda/manifest.json
-          grep -Fq '"source_handler": "routes/users/[id]/handler.rb"' generated/lambda/manifest.json
-          ! grep -R -E 'config/environment|Rails\.application' generated/lambda
-          test -z "$(git status --porcelain --untracked-files=all -- generated/)"
+          grep -Fq '"generated_handler": "app/controllers/users/show/handler.rb"' generated/lambda/manifest.json
+          ! grep -R -E 'config/environment|Rails\.application' generated/lambda app/controllers/*/*/handler.rb
+          test -z "$(git status --porcelain --untracked-files=all -- generated/ app/controllers/)"
       - run: bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
       - run: bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
 
@@ -109,9 +110,11 @@ jobs:
       - name: Verify grouped dispatch build
         run: |
           grep -q '"handler_granularity": "group"' generated/lambda/manifest.json
-          grep -q 'case route.name' generated/lambda/groups/orders/handler.rb
+          grep -q 'case route.group' generated/lambda/entrypoint.rb
           grep -q 'OresGenerated::Groups::Orders' generated/lambda/entrypoint.rb
-          grep -Fq 'require_relative "../../routes/orders/[id]/handler"' generated/lambda/groups/orders/handler.rb
+          grep -q 'OresGenerated::EndpointHandlers::Order' generated/lambda/groups/orders/handler.rb
+          test -f app/controllers/orders/show/handler.rb
+          git check-ignore -q app/controllers/orders/show/handler.rb
           ! grep -R -E 'config/environment|Rails\.application' generated/lambda
       - run: bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
       - run: bundle exec ruby lambda-test/aws_lambda_adapter_test.rb

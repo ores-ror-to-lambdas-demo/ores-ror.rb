@@ -3,20 +3,7 @@
 require "test_helper"
 
 class RuntimeContractTest < ActionDispatch::IntegrationTest
-  test "shared dispatcher reaches the physical health handler directly" do
-    result = OresApp::Dispatcher.call(
-      "method" => "GET",
-      "path" => "/healthz",
-      "headers" => { "x-request-id" => "direct-health" }
-    )
-
-    assert_equal 200, result.fetch("status"), result.inspect
-    payload = JSON.parse(result.fetch("body"))
-    assert_equal true, payload.fetch("ok")
-    assert_equal "direct-health", result.fetch("headers").fetch("x-request-id")
-  end
-
-  test "health runs through Rails adapter and shared dispatcher" do
+  test "health runs through its endpoint-specific Rails controller" do
     get "/healthz", headers: { "x-request-id" => "contract-health" }
     assert response.successful?, response.body
     payload = JSON.parse(response.body)
@@ -27,13 +14,13 @@ class RuntimeContractTest < ActionDispatch::IntegrationTest
     assert_equal "contract-health", response.headers["x-request-id"]
   end
 
-  test "Rails router is generated from the shared route table" do
+  test "Rails router maps endpoints to colocated controller directories" do
     assert_recognizes(
-      { controller: "resources", action: "dispatch", ores_handler: "user", id: "demo-user" },
+      { controller: "users/show/endpoint", action: "call", ores_handler: "user", ores_route_name: "user", id: "demo-user" },
       { path: "/users/demo-user", method: :get }
     )
     assert_recognizes(
-      { controller: "resources", action: "dispatch", ores_handler: "checkout_session", id: "cart-1" },
+      { controller: "checkout_sessions/create/endpoint", action: "call", ores_handler: "checkout_session", ores_route_name: "checkout_session", id: "cart-1" },
       { path: "/checkout-sessions/cart-1", method: :post }
     )
   end

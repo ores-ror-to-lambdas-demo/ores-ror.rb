@@ -9,31 +9,32 @@ def ruby_const(value)
   value.to_s.split(/[^A-Za-z0-9]+/).reject(&:empty?).map { |part| part[0].upcase + part[1..].to_s }.join
 end
 
-def generated_route_relative_path(route)
-  OresApp::Routes.handler_relative_path(route).delete_prefix("routes/")
+def validate_endpoint_controllers!(routes)
+  missing = routes.reject { |route| File.file?(OresApp::Routes.controller_path(route)) }
+  return if missing.empty?
+
+  abort "missing endpoint controllers: #{missing.map { |route| OresApp::Routes.controller_relative_path(route) }.join(", ")}"
 end
 
-def generated_route_require_path(route)
-  generated_route_relative_path(route).delete_suffix(".rb")
-end
-
-def write_route_handler(lambda_dir, route)
-  handler_path = File.join(lambda_dir, "routes", generated_route_relative_path(route))
-  FileUtils.mkdir_p(File.dirname(handler_path))
+def write_colocated_handler(route)
+  path = OresApp::Routes.handler_path(route)
+  FileUtils.mkdir_p(File.dirname(path))
   const_name = ruby_const(route.name)
-  File.write(handler_path, <<~RUBY)
+
+  File.write(path, <<~RUBY)
     # frozen_string_literal: true
     # GENERATED FILE. DO NOT EDIT OR COMMIT.
+    # Source controller: #{OresApp::Routes.controller_relative_path(route)}
 
-    require "ores_app/route_handlers"
+    require "ores_app/handlers"
 
     module OresGenerated
-      module Routes
+      module EndpointHandlers
         module #{const_name}
           module_function
 
           def call(request)
-            OresApp::RouteHandlers.call(#{route.name.inspect}, request)
+            OresApp::Handlers.call(#{route.handler.inspect}, request)
           end
         end
       end
@@ -44,16 +45,13 @@ end
 def write_group_handler(lambda_dir, group, routes)
   group_dir = File.join(lambda_dir, "groups", group)
   FileUtils.mkdir_p(group_dir)
-  requires = routes.map { |route| %(require_relative "../../routes/#{generated_route_require_path(route)}") }.join("\n")
   cases = routes.map do |route|
-    %(when #{route.name.inspect} then OresGenerated::Routes::#{ruby_const(route.name)}.call(request))
+    %(when #{route.name.inspect} then OresGenerated::EndpointHandlers::#{ruby_const(route.name)}.call(request))
   end.join("\n          ")
 
   File.write(File.join(group_dir, "handler.rb"), <<~RUBY)
     # frozen_string_literal: true
     # GENERATED FILE. DO NOT EDIT OR COMMIT.
-
-    #{requires}
 
     module OresGenerated
       module Groups
@@ -64,7 +62,7 @@ def write_group_handler(lambda_dir, group, routes)
             case route.name
             #{cases}
             else
-              raise ArgumentError, "route \#{route.name.inspect} does not belong to group #{group}"
+              raise ArgumentError, "route #{route.name.inspect} does not belong to group #{group}"
             end
           end
         end
@@ -73,24 +71,28 @@ def write_group_handler(lambda_dir, group, routes)
   RUBY
 end
 
-def write_entrypoint(lambda_dir, granularity, routes)
+def write_entrypoint(root, lambda_dir, granularity, routes)
+  handler_requires = routes.map do |route|
+    %(require File.join(app_root, #{OresApp::Routes.handler_relative_path(route).inspect}))
+  end.join("\n")
+
   if granularity == "route"
-    requires = routes.map { |route| %(require_relative "routes/#{generated_route_require_path(route)}") }.join("\n")
     cases = routes.map do |route|
-      %(when #{route.name.inspect} then OresGenerated::Routes::#{ruby_const(route.name)}.call(request))
+      %(when #{route.name.inspect} then OresGenerated::EndpointHandlers::#{ruby_const(route.name)}.call(request))
     end.join("\n            ")
     resolver = <<~RUBY
       def invoke(route, request)
         case route.name
         #{cases}
         else
-          raise ArgumentError, "no generated route handler for \#{route.name.inspect}"
+          raise ArgumentError, "no generated endpoint handler for #{route.name.inspect}"
         end
       end
     RUBY
+    group_requires = ""
   else
     groups = routes.group_by(&:group)
-    requires = groups.keys.sort.map { |group| %(require_relative "groups/#{group}/handler") }.join("\n")
+    group_requires = groups.keys.sort.map { |group| %(require_relative "groups/#{group}/handler") }.join("\n")
     cases = groups.keys.sort.map do |group|
       %(when #{group.inspect} then OresGenerated::Groups::#{ruby_const(group)}.call(route, request))
     end.join("\n            ")
@@ -99,7 +101,7 @@ def write_entrypoint(lambda_dir, granularity, routes)
         case route.group
         #{cases}
         else
-          raise ArgumentError, "no generated group handler for \#{route.group.inspect}"
+          raise ArgumentError, "no generated group handler for #{route.group.inspect}"
         end
       end
     RUBY
@@ -113,7 +115,8 @@ def write_entrypoint(lambda_dir, granularity, routes)
     $LOAD_PATH.unshift(File.join(app_root, "lib")) unless $LOAD_PATH.include?(File.join(app_root, "lib"))
 
     require "ores_app/dispatcher"
-    #{requires}
+    #{handler_requires}
+    #{group_requires}
 
     module OresGenerated
       module LambdaEntrypoint
@@ -132,55 +135,40 @@ end
 target = ENV.fetch("ORES_BUILD_TARGET", "rails").downcase
 output_root = File.expand_path(ENV.fetch("ORES_BUILD_OUTPUT", "../generated"), __dir__)
 lambda_dir = File.join(output_root, "lambda")
+routes = OresApp::Routes::TABLE
 
 case target
 when "rails"
   FileUtils.rm_rf(lambda_dir)
-  warn "build target=rails: no lambda runtime generated; boot Rails normally"
+  warn "build target=rails: boot Rails normally; endpoint handler.rb files are generated only for FaaS builds"
 when "lambda"
   granularity = ENV.fetch("ORES_LAMBDA_HANDLER_GRANULARITY", "route").downcase
   abort "ORES_LAMBDA_HANDLER_GRANULARITY must be route or group" unless %w[route group].include?(granularity)
 
+  validate_endpoint_controllers!(routes)
+  routes.each { |route| write_colocated_handler(route) }
+
   FileUtils.rm_rf(lambda_dir)
   FileUtils.mkdir_p(lambda_dir)
-  routes = OresApp::Routes::TABLE
-
-  missing_handlers = routes.reject { |route| File.file?(OresApp::Routes.handler_path(route)) }
-  unless missing_handlers.empty?
-    abort "missing committed route handlers: #{missing_handlers.map { |route| OresApp::Routes.handler_relative_path(route) }.join(", ")}"
-  end
-
-  routes.each { |route| write_route_handler(lambda_dir, route) }
   routes.group_by(&:group).each { |group, grouped_routes| write_group_handler(lambda_dir, group, grouped_routes) }
-  write_entrypoint(lambda_dir, granularity, routes)
-
-  route_manifest = routes.map do |route|
-    {
-      method: route.verb,
-      path: route.path,
-      handler: route.handler,
-      name: route.name,
-      middleware: route.middleware,
-      group: route.group,
-      pool: route.pool,
-      source_handler: OresApp::Routes.handler_relative_path(route),
-      route_handler: "generated/lambda/routes/#{generated_route_relative_path(route)}",
-      group_handler: "generated/lambda/groups/#{route.group}/handler.rb"
-    }
-  end
+  write_entrypoint(File.expand_path("..", __dir__), lambda_dir, granularity, routes)
 
   manifest = {
-    "schema" => "ores-lambda-manifest/v2",
+    "schema" => "ores-lambda-manifest/v3",
     "application" => "ores-ror.rb",
     "entrypoint" => "generated/lambda/entrypoint.rb",
     "runtime" => "ruby",
     "rails_boot" => false,
     "handler_granularity" => granularity,
-    "routes" => route_manifest
+    "routes" => OresApp::Routes.manifest.map do |entry|
+      entry.merge(
+        group_handler: "generated/lambda/groups/#{entry.fetch(:group)}/handler.rb"
+      )
+    end
   }
 
   File.write(File.join(lambda_dir, "manifest.json"), JSON.pretty_generate(manifest) + "\n")
-  warn "build target=lambda: generated URL-shaped route handlers in #{lambda_dir}; active granularity=#{granularity}; Rails not booted"
+  warn "build target=lambda: generated endpoint-local handler.rb files plus #{lambda_dir}; granularity=#{granularity}"
 else
   abort "unsupported ORES_BUILD_TARGET=#{target.inspect}; expected rails or lambda"
 end

@@ -1,0 +1,1 @@
+# frozen_string_literal: true\n\nmodule Healthz\n  module Show\n    class EndpointController < OresEndpointController\n      ORES_ROUTE_NAME = "health".freeze\n\n      prepend_view_path __dir__ if respond_to?(:prepend_view_path)\n\n      def call\n        dispatch_ores_endpoint(expected_route_name: ORES_ROUTE_NAME)\n      end\n    end\n  end\nend\n
