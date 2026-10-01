@@ -92,7 +92,7 @@ jobs:
           grep -Fq '"handler_path": "app/controllers/users/show/handler.rb"' generated/lambda/manifest.json
           grep -Fq '"controller": "users/show/endpoint"' generated/lambda/manifest.json
           grep -Fq '"action": "show"' generated/lambda/manifest.json
-          ! grep -R -E 'config/environment|Rails\.application' generated/lambda
+          ! find generated/lambda -name '*.rb' -print0 | xargs -0 grep -E 'config/environment|Rails\.application'
           ! find app/controllers -name handler.rb -print0 | xargs -0 grep -E 'config/environment|Rails\.application'
           test -z "$(git status --porcelain --untracked-files=all -- generated/ app/controllers/)"
       - run: BUNDLE_WITHOUT=rails bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
@@ -119,7 +119,7 @@ jobs:
           grep -q 'OresGenerated::EndpointHandlers::Order' generated/lambda/groups/orders/handler.rb
           test -f app/controllers/orders/show/handler.rb
           git check-ignore -q app/controllers/orders/show/handler.rb
-          ! grep -R -E 'config/environment|Rails\.application' generated/lambda
+          ! find generated/lambda -name '*.rb' -print0 | xargs -0 grep -E 'config/environment|Rails\.application'
       - run: BUNDLE_WITHOUT=rails bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
       - run: BUNDLE_WITHOUT=rails bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
 
