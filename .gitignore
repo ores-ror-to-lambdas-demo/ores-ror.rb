@@ -4,4 +4,5 @@
 !/log/.keep
 !/tmp/.keep
 /vendor/bundle
+/vendor/bundle-*
 .env
