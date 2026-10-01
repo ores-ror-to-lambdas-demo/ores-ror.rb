@@ -78,6 +78,7 @@ jobs:
           test -f app/controllers/orders/cancel/endpoint_controller.rb
           test -f app/controllers/profiles/preferences/show/endpoint_controller.rb
           test ! -e app/controllers/users/show/handler.rb
+          test -z "$(git ls-files ':(glob)app/controllers/**/handler.rb')"
       - run: bundle exec ruby bin/build-runtime
       - name: Verify co-located generated handlers and Lambda manifest
         run: |
