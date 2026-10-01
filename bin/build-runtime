@@ -167,17 +167,26 @@ when "lambda"
       rails_controller_source: OresApp::Routes.rails_controller_relative_path(route),
       source_handler: OresApp::Routes.handler_relative_path(route),
       route_handler: "generated/lambda/routes/#{generated_route_relative_path(route)}",
-      group_handler: "generated/lambda/groups/#{route.group}/handler.rb"
+      group_handler: "generated/lambda/groups/#{route.group}/handler.rb",
+      graal_worker_pool_key: OresApp::Routes.handler_relative_path(route)
     }
   end
 
   manifest = {
-    "schema" => "ores-lambda-manifest/v2",
+    "schema" => "ores-lambda-manifest/v3",
     "application" => "ores-ror.rb",
     "entrypoint" => "generated/lambda/entrypoint.rb",
     "runtime" => "ruby",
     "rails_boot" => false,
     "handler_granularity" => granularity,
+    "graal_worker_model" => {
+      "unit" => "polyglot-inner-context",
+      "host_processes" => 1,
+      "pool_key" => "handler-path",
+      "cross_handler_context_reuse" => false,
+      "max_concurrency_per_context" => 1,
+      "warm_reuse" => "same-handler-only"
+    },
     "routes" => route_manifest
   }
 
