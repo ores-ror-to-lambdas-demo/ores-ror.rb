@@ -22,6 +22,7 @@ services:
     command: ["truffleruby", "-S", "bundle", "exec", "truffleruby", "--jvm", "graal/server.rb"]
     environment:
       BUNDLE_PATH: "vendor/bundle-truffleruby"
+      BUNDLE_WITHOUT: "rails"
       ORES_BUILD_TARGET: "lambda"
       ORES_LAMBDA_HANDLER_GRANULARITY: "route"
       ORES_GRAAL_HOST: "127.0.0.1"
