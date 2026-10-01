@@ -3,12 +3,12 @@
 require "test_helper"
 
 class RuntimeContractTest < ActionDispatch::IntegrationTest
-  test "shared dispatcher reaches the physical health handler directly" do
-    result = OresApp::Dispatcher.call({
+  test "shared dispatcher reaches health business logic directly" do
+    result = OresApp::Dispatcher.call(
       "method" => "GET",
       "path" => "/healthz",
       "headers" => { "x-request-id" => "direct-health" }
-    })
+    )
 
     assert_equal 200, result.fetch("status"), result.inspect
     payload = JSON.parse(result.fetch("body"))
@@ -16,7 +16,7 @@ class RuntimeContractTest < ActionDispatch::IntegrationTest
     assert_equal "direct-health", result.fetch("headers").fetch("x-request-id")
   end
 
-  test "health runs through Rails adapter and shared dispatcher" do
+  test "health runs through its own Rails endpoint controller" do
     get "/healthz", headers: { "x-request-id" => "contract-health" }
     assert response.successful?, response.body
     payload = JSON.parse(response.body)
@@ -27,14 +27,18 @@ class RuntimeContractTest < ActionDispatch::IntegrationTest
     assert_equal "contract-health", response.headers["x-request-id"]
   end
 
-  test "Rails router is generated from the shared route table" do
+  test "Rails routes point to endpoint-specific controller namespaces" do
     assert_recognizes(
-      { controller: "resources", action: "handle", ores_handler: "user", id: "demo-user" },
+      { controller: "users/show/users", action: "show", id: "demo-user" },
       { path: "/users/demo-user", method: :get }
     )
     assert_recognizes(
-      { controller: "resources", action: "handle", ores_handler: "checkout_session", id: "cart-1" },
+      { controller: "checkout_sessions/create/checkout_sessions", action: "create", id: "cart-1" },
       { path: "/checkout-sessions/cart-1", method: :post }
+    )
+    assert_recognizes(
+      { controller: "orders/cancel/orders", action: "cancel", id: "order-1" },
+      { path: "/orders/order-1/cancel", method: :post }
     )
   end
 end

@@ -7,28 +7,32 @@ class RoutesTest < ActionDispatch::IntegrationTest
     assert_empty(expected - names)
   end
 
-  test "every declared route has a committed URL-shaped handler" do
+  test "every endpoint owns a conventional Rails controller folder and generated handler location" do
     expected = {
-      "/users/:id" => "routes/users/[id]/handler.rb",
-      "/carts/:id" => "routes/carts/[id]/handler.rb",
-      "/checkout-sessions/:id" => "routes/checkout-sessions/[id]/handler.rb",
-      "/products/:id" => "routes/products/[id]/handler.rb",
-      "/orders/:id" => "routes/orders/[id]/handler.rb",
-      "/orders/:id/cancel" => "routes/orders/[id]/cancel/handler.rb",
-      "/accounts/:id" => "routes/accounts/[id]/handler.rb",
-      "/inventory/:id" => "routes/inventory/[id]/handler.rb",
-      "/recommendations/:id" => "routes/recommendations/[id]/handler.rb",
-      "/search" => "routes/search/handler.rb",
-      "/sessions" => "routes/sessions/handler.rb",
-      "/profiles/:id/preferences" => "routes/profiles/[id]/preferences/handler.rb",
-      "/healthz" => "routes/healthz/handler.rb"
+      "/users/:id" => ["app/controllers/users/show/users_controller.rb", "app/controllers/users/show/handler.rb"],
+      "/carts/:id" => ["app/controllers/carts/show/carts_controller.rb", "app/controllers/carts/show/handler.rb"],
+      "/checkout-sessions/:id" => ["app/controllers/checkout_sessions/create/checkout_sessions_controller.rb", "app/controllers/checkout_sessions/create/handler.rb"],
+      "/products/:id" => ["app/controllers/products/show/products_controller.rb", "app/controllers/products/show/handler.rb"],
+      "/orders/:id" => ["app/controllers/orders/show/orders_controller.rb", "app/controllers/orders/show/handler.rb"],
+      "/orders/:id/cancel" => ["app/controllers/orders/cancel/orders_controller.rb", "app/controllers/orders/cancel/handler.rb"],
+      "/accounts/:id" => ["app/controllers/accounts/show/accounts_controller.rb", "app/controllers/accounts/show/handler.rb"],
+      "/inventory/:id" => ["app/controllers/inventory/show/inventory_controller.rb", "app/controllers/inventory/show/handler.rb"],
+      "/recommendations/:id" => ["app/controllers/recommendations/show/recommendations_controller.rb", "app/controllers/recommendations/show/handler.rb"],
+      "/search" => ["app/controllers/search/index/search_controller.rb", "app/controllers/search/index/handler.rb"],
+      "/sessions" => ["app/controllers/sessions/create/sessions_controller.rb", "app/controllers/sessions/create/handler.rb"],
+      "/profiles/:id/preferences" => ["app/controllers/profiles/preferences/profiles_controller.rb", "app/controllers/profiles/preferences/handler.rb"],
+      "/healthz" => ["app/controllers/healthz/show/healthz_controller.rb", "app/controllers/healthz/show/handler.rb"]
     }
 
-    actual = OresApp::Routes::TABLE.to_h { |route| [route.path, OresApp::Routes.handler_relative_path(route)] }
+    actual = OresApp::Routes::TABLE.to_h do |route|
+      [route.path, [OresApp::Routes.controller_relative_path(route), OresApp::Routes.handler_relative_path(route)]]
+    end
     assert_equal expected, actual
 
     OresApp::Routes::TABLE.each do |route|
-      assert File.file?(OresApp::Routes.handler_path(route)), "missing #{OresApp::Routes.handler_relative_path(route)}"
+      assert File.file?(OresApp::Routes.controller_path(route)), "missing #{OresApp::Routes.controller_relative_path(route)}"
+      refute File.file?(OresApp::Routes.handler_path(route)), "generated handler must not exist in a clean Rails checkout"
+      assert_equal File.dirname(OresApp::Routes.controller_relative_path(route)), File.dirname(OresApp::Routes.handler_relative_path(route))
     end
   end
 end
