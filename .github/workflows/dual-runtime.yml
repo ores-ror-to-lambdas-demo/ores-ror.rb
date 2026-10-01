@@ -82,7 +82,7 @@ jobs:
           grep -q '"handler_granularity": "route"' generated/lambda/manifest.json
           ! grep -R -E 'config/environment|Rails\.application' generated/lambda
           test -z "$(git status --porcelain --untracked-files=all -- generated/)"
-      - run: ruby lambda-test/aws_lambda_adapter_test.rb
+      - run: bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
 
   lambda-group-codegen:
     runs-on: ubuntu-latest
@@ -103,7 +103,7 @@ jobs:
           grep -q 'case route.name' generated/lambda/groups/orders/handler.rb
           grep -q 'OresGenerated::Groups::Orders' generated/lambda/entrypoint.rb
           ! grep -R -E 'config/environment|Rails\.application' generated/lambda
-      - run: ruby lambda-test/aws_lambda_adapter_test.rb
+      - run: bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
 
   truffleruby-aws-lambda:
     runs-on: ubuntu-latest
