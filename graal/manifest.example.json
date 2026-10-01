@@ -1,0 +1,21 @@
+{
+  "profile": "gs-graal-guest-v1",
+  "language": "ruby",
+  "source_file": "handler.rb",
+  "handler": "handler",
+  "abi": "json-string-v1",
+  "support_api": "gs-support-v1",
+  "isolate_mode": "internal",
+  "capabilities": [
+    {"name": "http", "resource": "https://data.example.internal/v1"}
+  ],
+  "sandbox": {
+    "max_isolate_memory": "256MB",
+    "max_heap_memory": "96MB",
+    "max_cpu_time": "5s",
+    "max_ast_depth": "128",
+    "max_threads": "1",
+    "max_output_stream_size": "1MB",
+    "max_error_stream_size": "1MB"
+  }
+}
