@@ -3,8 +3,8 @@
 require_relative "../../lib/ores_app/dispatcher"
 
 class ResourcesController < ApplicationController
-  def dispatch
-    result = OresApp::Dispatcher.call(
+  def handle
+    result = OresApp::Dispatcher.call({
       "request_id" => request.request_id,
       "method" => request.request_method,
       "path" => request.path,
@@ -12,7 +12,7 @@ class ResourcesController < ApplicationController
       "headers" => request.headers.to_h.select { |name, _| %w[content-type x-request-id].include?(name.to_s.downcase) },
       "content_type" => request.content_type,
       "body" => parsed_body
-    )
+    })
 
     result.fetch("headers", {}).each do |name, value|
       response.set_header(name, value)
