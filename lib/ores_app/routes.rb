@@ -58,7 +58,38 @@ module OresApp
     end
 
     def handler_path(route)
-      File.expand_path(File.join("../..", handler_relative_path(route)), __dir__)
+      File.join(root_path, handler_relative_path(route))
+    end
+
+    def root_path
+      File.expand_path("../..", __dir__)
+    end
+
+    def filesystem_handler_paths
+      Dir.glob(File.join(root_path, "routes", "**", "handler.rb")).sort.map do |path|
+        path.delete_prefix("#{root_path}/")
+      end
+    end
+
+    def validate!
+      errors = []
+
+      duplicate_route_keys = TABLE.group_by { |route| [route.verb, route.path] }.select { |_key, routes| routes.length > 1 }.keys
+      errors << "duplicate verb/path entries: #{duplicate_route_keys.map { |verb, path| "#{verb} #{path}" }.join(", ")}" unless duplicate_route_keys.empty?
+
+      duplicate_names = TABLE.group_by(&:name).select { |_name, routes| routes.length > 1 }.keys
+      errors << "duplicate route names: #{duplicate_names.join(", ")}" unless duplicate_names.empty?
+
+      expected_handlers = TABLE.map { |route| handler_relative_path(route) }.sort
+      missing_handlers = expected_handlers.reject { |path| File.file?(File.join(root_path, path)) }
+      orphan_handlers = filesystem_handler_paths - expected_handlers
+
+      errors << "missing filesystem handlers: #{missing_handlers.join(", ")}" unless missing_handlers.empty?
+      errors << "orphan filesystem handlers: #{orphan_handlers.join(", ")}" unless orphan_handlers.empty?
+
+      raise ArgumentError, "invalid route contract:\n- #{errors.join("\n- ")}" unless errors.empty?
+
+      true
     end
 
     def manifest
