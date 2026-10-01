@@ -1,38 +1,78 @@
 # ores-ror.rb
 
-One Rails application, two execution modes, one source of truth.
+One repository, two build modes, one route/middleware/business-logic source of truth.
 
-## The rule
+## Invariant
 
-There is no Graal-specific copy of the routes/controllers/business logic. `config/routes.rb`, the controllers, services, and middleware are the application in both modes.
+The checkout is not edited to switch runtimes. Environment variables select the build:
 
-1. **Rails/Puma** boots the repository conventionally on MRI (or directly on TruffleRuby).
-2. **Graal supervisor mode** boots this exact Rails tree inside reusable TruffleRuby contexts owned by `ores-ror.infra`. Each request is sent through `Rails.application.call` as a Rack request.
+```sh
+# ordinary Rails application
+ORES_BUILD_TARGET=rails bundle exec rails server
 
-The old generated `graal/handler.rb` and duplicate `graal/routes.json` model was intentionally removed.
+# lambda artifact generation; no Rails boot
+ORES_BUILD_TARGET=lambda ruby bin/build-runtime
+```
 
-## Request/concurrency model
+Generated lambda artifacts live under `generated/` and are intentionally ignored by Git.
 
-Request identity is carried in the Rack request and `x-request-id`; it is never identified by `Thread.current`. A supervisor worker thread serves many requests over its lifetime. A warm Graal cell owns at most five reusable Rails/TruffleRuby contexts, so up to five requests can execute concurrently without sharing per-request Ruby state.
+## Shared application contract
 
-Guest Rails code cannot create threads or child processes in supervisor mode. Native/FFI and direct socket access are disabled by the host. The only database/network capability is the host `gs_http` bridge.
+`lib/ores_app/routes.rb` is Rails-independent and owns the route table, middleware list, handler ID, handler group, and isolate-pool key. `config/routes.rb` installs that same table into Rails. Both Rails controllers and generated lambda handlers call the same `lib/ores_app` dispatcher/business handlers.
 
-## HTTP database transport
+Rails mode boots Rails normally. Lambda mode must never require `config/environment`, `Rails.application`, Rack dispatch, Rails initializers, or Puma.
 
-`HttpDatabase` is the same service in both runtimes:
+## Lambda handler topology
 
-- ordinary Rails uses a bounded persistent `Net::HTTP` connection pool;
-- Graal mode automatically uses `ORES_GS_HTTP`, the host-mediated HTTP bridge backed by a shared JDK `HttpClient` pool.
+Every route always gets its own generated handler:
 
-There is no PostgreSQL wire-protocol connection from the Rails application.
+```text
+generated/lambda/routes/user/handler.rb
+generated/lambda/routes/cart/handler.rb
+generated/lambda/routes/order/handler.rb
+generated/lambda/routes/cancel_order/handler.rb
+...
+```
 
-## CI
+Codegen also emits higher-level grouped handlers with a switch over the member routes:
 
-`.github/workflows/dual-runtime.yml` proves:
+```text
+generated/lambda/groups/users/handler.rb
+generated/lambda/groups/carts/handler.rb
+generated/lambda/groups/orders/handler.rb
+generated/lambda/groups/system/handler.rb
+...
+```
 
-- Rails tests on MRI Ruby;
-- the same Rails tests on TruffleRuby/GraalVM;
-- the same checked-out Rails tree boots and serves Rack requests inside the Java/Graal supervisor;
-- a separate capability probe for true `Engine.spawnIsolate(true)` Ruby support.
+Choose the active dispatch layer at build time:
 
-The final probe is deliberately separate because current GraalVM releases still do not list Ruby among supported Polyglot Native-Isolate languages. It must never silently downgrade an isolate request into an ordinary context.
+```sh
+ORES_BUILD_TARGET=lambda ORES_LAMBDA_HANDLER_GRANULARITY=route ruby bin/build-runtime
+ORES_BUILD_TARGET=lambda ORES_LAMBDA_HANDLER_GRANULARITY=group ruby bin/build-runtime
+```
+
+`route` is the default because one generated `handler.rb` per route is the smallest known-good lambda unit. `group` lets an isolate load a larger route family (for example all order routes) and switch on the matched route without changing source code.
+
+The generated `manifest.json` records both handler paths for every route plus its middleware, group, and isolate pool. A supervisor can therefore pool isolates by route, group, privilege class, deployment generation, or another policy without asking Rails to route the request.
+
+## Request flow
+
+```text
+HTTP -> shared route match -> shared middleware -> isolate-pool selection -> generated route/group handler -> shared business code
+```
+
+The Rails path is instead:
+
+```text
+HTTP -> Rails router generated from shared route table -> thin controller adapter -> shared dispatcher/middleware/business code
+```
+
+The two modes share application semantics, not Rails runtime state.
+
+## Graal/TruffleRuby
+
+`graal/bootstrap.rb` loads only `generated/lambda/entrypoint.rb`. It does not boot Rails. The Graal supervisor can keep pools of long-lived TruffleRuby contexts and multiplex many requests through the generated route/group handlers, subject to the supervisor's concurrency/lifetime policy.
+
+## Tests
+
+Rails tests remain under `test/`. No-Rails lambda tests live under `lambda-test/` so the lambda contract can explicitly assert that the `Rails` constant was never loaded.

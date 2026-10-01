@@ -1,8 +1,13 @@
-require "test_helper"
-require_relative "../aws-lambda/handler"
+# frozen_string_literal: true
 
-class AwsLambdaAdapterTest < ActiveSupport::TestCase
-  test "HTTP API v2 event reaches the same Rails health route" do
+require "json"
+require "minitest/autorun"
+require_relative "../aws-lambda/adapter"
+
+class AwsLambdaAdapterTest < Minitest::Test
+  def test_http_api_v2_event_reaches_generated_route_handler_without_rails
+    refute defined?(Rails), "lambda test must not load Rails"
+
     event = {
       "version" => "2.0",
       "rawPath" => "/healthz",
@@ -21,5 +26,7 @@ class AwsLambdaAdapterTest < ActiveSupport::TestCase
     payload = JSON.parse(response.fetch("body"))
     assert_equal true, payload.fetch("ok")
     assert_equal "ores-ror.rb", payload.fetch("service")
+    assert_equal "lambda", payload.fetch("execution_mode")
+    refute defined?(Rails), "lambda invocation must not load Rails"
   end
 end

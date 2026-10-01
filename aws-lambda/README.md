@@ -1,7 +1,17 @@
 # TruffleRuby on AWS Lambda
 
-This target uses the same Rails application as Puma and the Graal worker cluster. There are no Lambda-specific controllers, routes, services, models, or business rules.
+This target is generated from the same repository as the ordinary Rails application, but **does not boot Rails**.
 
-`handler.rb` translates API Gateway HTTP API v2 / Lambda Function URL events (plus API Gateway v1 compatibility) into the shared `OresRuntime::RackDispatch` request shape. `runtime.rb` implements AWS Lambda's custom Runtime API loop. `bootstrap` is the custom-runtime entry point. The container uses the official GraalVM Community TruffleRuby standalone image, so Lambda executes TruffleRuby native standalone rather than MRI.
+Build mode is selected only with environment variables:
 
-The runtime is warm: Rails boots once per Lambda execution environment and subsequent invocations reuse the loaded application and HTTP pools. Standard Lambda execution environments invoke one request at a time; scaling comes from Lambda creating additional environments. The self-hosted Graal target instead keeps multiple Rails/TruffleRuby workers inside each warm cell.
+```sh
+ORES_BUILD_TARGET=lambda ORES_LAMBDA_HANDLER_GRANULARITY=route ruby bin/build-runtime
+```
+
+The default `route` mode generates one `handler.rb` for every route. Codegen also generates grouped handlers such as `groups/orders/handler.rb`; selecting `ORES_LAMBDA_HANDLER_GRANULARITY=group` makes the generated entrypoint dispatch through those group switches instead.
+
+`aws-lambda/adapter.rb` only adapts API Gateway/Lambda events to the generated lambda entrypoint. It is deliberately not named `handler.rb`: the actual application handlers are the generated per-route/group `handler.rb` files. The adapter never requires `config/environment` or calls `Rails.application`. `runtime.rb` implements AWS Lambda's custom Runtime API loop, and `bootstrap` starts it under TruffleRuby.
+
+The Lambda image installs the Gemfile with `BUNDLE_WITHOUT=rails`, runs codegen during the image build, and therefore proves that the lambda execution path does not depend on the Rails runtime.
+
+Generated artifacts are intentionally not version-controlled.

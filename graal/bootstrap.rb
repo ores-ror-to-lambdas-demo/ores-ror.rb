@@ -1,25 +1,18 @@
+# frozen_string_literal: true
+
 ORES_GRAAL_RUNTIME = true unless defined?(ORES_GRAAL_RUNTIME)
 ORES_GS_HTTP = method(:gs_http) unless defined?(ORES_GS_HTTP)
 
 app_root = gs_app_root.to_s
-rails_env = gs_rails_env.to_s
-bundle_path = File.join(app_root, "vendor", "bundle-truffleruby")
-ENV["BUNDLE_GEMFILE"] = File.join(app_root, "Gemfile")
-ENV["BUNDLE_PATH"] = bundle_path
-ENV["RAILS_ENV"] = rails_env
-ENV["RACK_ENV"] = rails_env
-ENV["RAILS_LOG_TO_STDOUT"] = "1"
+entrypoint = File.join(app_root, "generated", "lambda", "entrypoint.rb")
+raise "lambda runtime not generated; run ORES_BUILD_TARGET=lambda ruby bin/build-runtime" unless File.file?(entrypoint)
 
 require "json"
-require File.join(app_root, "lib", "ores_runtime", "rack_dispatch")
-require File.join(app_root, "config", "environment")
+require entrypoint
 
-Rails.application.eager_load!
-ORES_RAILS_APP = Rails.application unless defined?(ORES_RAILS_APP)
-
-def ores_rack_invoke(request_json)
+def ores_lambda_invoke(request_json)
   request = JSON.parse(request_json)
-  JSON.generate(OresRuntime::RackDispatch.call(ORES_RAILS_APP, request))
+  JSON.generate(OresGenerated::LambdaEntrypoint.call(request))
 end
 
-method(:ores_rack_invoke)
+method(:ores_lambda_invoke)

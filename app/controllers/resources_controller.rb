@@ -1,72 +1,32 @@
+# frozen_string_literal: true
+
+require_relative "../../lib/ores_app/dispatcher"
+
 class ResourcesController < ApplicationController
-  def user
-    proxy(:get, "/users/#{safe_id}")
-  end
+  def dispatch
+    result = OresApp::Dispatcher.call(
+      "request_id" => request.request_id,
+      "method" => request.request_method,
+      "path" => request.path,
+      "query" => request.query_parameters,
+      "headers" => request.headers.to_h.select { |name, _| %w[content-type x-request-id].include?(name.to_s.downcase) },
+      "content_type" => request.content_type,
+      "body" => parsed_body
+    )
 
-  def cart
-    proxy(:get, "/carts/#{safe_id}")
-  end
-
-  def checkout_session
-    proxy(:post, "/checkout-sessions/#{safe_id}", body: request.request_parameters)
-  end
-
-  def product
-    proxy(:get, "/products/#{safe_id}")
-  end
-
-  def order
-    proxy(:get, "/orders/#{safe_id}")
-  end
-
-  def cancel_order
-    proxy(:post, "/orders/#{safe_id}/cancel", body: request.request_parameters)
-  end
-
-  def account
-    proxy(:get, "/accounts/#{safe_id}")
-  end
-
-  def inventory
-    proxy(:get, "/inventory/#{safe_id}")
-  end
-
-  def recommendations
-    proxy(:get, "/recommendations/#{safe_id}", query: request.query_parameters)
-  end
-
-  def search
-    proxy(:get, "/search", query: request.query_parameters)
-  end
-
-  def create_session
-    proxy(:post, "/sessions", body: request.request_parameters)
-  end
-
-  def preferences
-    proxy(:get, "/profiles/#{safe_id}/preferences")
-  end
-
-  def health
-    render json: {
-      ok: true,
-      service: "ores-ror.rb",
-      runtime: HttpDatabase.runtime_name,
-      request_id: request.request_id,
-      thread_id_for_diagnostics_only: Thread.current.object_id
-    }
+    result.fetch("headers", {}).each do |name, value|
+      response.set_header(name, value)
+    end
+    self.status = result.fetch("status")
+    self.response_body = result.fetch("body")
   end
 
   private
 
-  def safe_id
-    value = params.require(:id).to_s
-    raise ActionController::BadRequest, "invalid id" unless value.match?(/\A[A-Za-z0-9_-]{1,128}\z/)
-    value
-  end
+  def parsed_body
+    return nil if request.raw_post.to_s.empty?
+    return request.request_parameters if request.content_type.to_s.include?("json")
 
-  def proxy(method, path, body: nil, query: nil)
-    result = HttpDatabase.request(method, path, body: body, query: query || {})
-    render json: result.fetch(:body), status: result.fetch(:status)
+    request.raw_post
   end
 end

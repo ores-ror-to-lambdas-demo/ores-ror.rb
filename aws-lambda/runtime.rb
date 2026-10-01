@@ -1,7 +1,7 @@
 require "json"
 require "net/http"
 require "uri"
-require_relative "handler"
+require_relative "adapter"
 
 module OresRuntime
   module AwsLambdaRuntime
