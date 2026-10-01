@@ -30,7 +30,7 @@ RUN set -eux; \
 ENV PATH=/opt/truffleruby/bin:${PATH} \
     BUNDLE_PATH=/opt/ores-ror-bundle \
     BUNDLE_GEMFILE=/var/task/Gemfile \
-    BUNDLE_WITHOUT=rails \
+    BUNDLE_WITHOUT=rails:test \
     ORES_BUILD_TARGET=lambda
 
 WORKDIR /var/task

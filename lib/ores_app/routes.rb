@@ -52,6 +52,15 @@ module OresApp
       nil
     end
 
+    def handler_relative_path(route)
+      segments = route.path.split("/").reject(&:empty?).map { |segment| filesystem_segment(segment) }
+      File.join("routes", *segments, "handler.rb")
+    end
+
+    def handler_path(route)
+      File.expand_path(File.join("../..", handler_relative_path(route)), __dir__)
+    end
+
     def manifest
       TABLE.map do |route|
         {
@@ -61,7 +70,8 @@ module OresApp
           name: route.name,
           middleware: route.middleware,
           group: route.group,
-          pool: route.pool
+          pool: route.pool,
+          source_handler: handler_relative_path(route)
         }
       end
     end
@@ -77,5 +87,12 @@ module OresApp
       Regexp.new("\\A#{pieces.join("/")}\\z")
     end
     private_class_method :route_pattern
+
+    def filesystem_segment(segment)
+      return "[#{segment.delete_prefix(":")}]" if segment.start_with?(":")
+
+      segment
+    end
+    private_class_method :filesystem_segment
   end
 end

@@ -3,9 +3,22 @@
 require "test_helper"
 
 class RuntimeContractTest < ActionDispatch::IntegrationTest
+  test "shared dispatcher reaches the physical health handler directly" do
+    result = OresApp::Dispatcher.call(
+      "method" => "GET",
+      "path" => "/healthz",
+      "headers" => { "x-request-id" => "direct-health" }
+    )
+
+    assert_equal 200, result.fetch("status"), result.inspect
+    payload = JSON.parse(result.fetch("body"))
+    assert_equal true, payload.fetch("ok")
+    assert_equal "direct-health", result.fetch("headers").fetch("x-request-id")
+  end
+
   test "health runs through Rails adapter and shared dispatcher" do
     get "/healthz", headers: { "x-request-id" => "contract-health" }
-    assert_response :success
+    assert response.successful?, response.body
     payload = JSON.parse(response.body)
     assert_equal true, payload.fetch("ok")
     assert_equal "ores-ror.rb", payload.fetch("service")

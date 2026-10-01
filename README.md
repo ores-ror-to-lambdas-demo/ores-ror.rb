@@ -18,23 +18,61 @@ Generated lambda artifacts live under `generated/` and are intentionally ignored
 
 ## Shared application contract
 
-`lib/ores_app/routes.rb` is Rails-independent and owns the route table, middleware list, handler ID, handler group, and isolate-pool key. `config/routes.rb` installs that same table into Rails. Both Rails controllers and generated lambda handlers call the same `lib/ores_app` dispatcher/business handlers.
+`lib/ores_app/routes.rb` is Rails-independent and owns the route table, middleware list, handler ID, handler group, and isolate-pool key. Every declared URL also owns a committed filesystem handler under `routes/`. `config/routes.rb` installs the same route table into Rails, while both Rails and generated lambda/Graal dispatch execute the committed route handler before entering shared business code.
 
 Rails mode boots Rails normally. Lambda mode must never require `config/environment`, `Rails.application`, Rack dispatch, Rails initializers, or Puma.
 
-## Lambda handler topology
+## Source route filesystem
 
-Every route always gets its own generated handler:
+Routes are real source directories, not only rows in `lib/ores_app/routes.rb`. Dynamic URL parameters use `[name]` in the filesystem so the repository remains portable across operating systems; for example `:id` maps to `[id]`.
 
 ```text
-generated/lambda/routes/user/handler.rb
-generated/lambda/routes/cart/handler.rb
-generated/lambda/routes/order/handler.rb
-generated/lambda/routes/cancel_order/handler.rb
+routes/
+├── users/
+│   └── [id]/
+│       └── handler.rb
+├── carts/
+│   └── [id]/
+│       └── handler.rb
+├── checkout-sessions/
+│   └── [id]/
+│       └── handler.rb
+├── products/
+│   └── [id]/
+│       └── handler.rb
+├── orders/
+│   └── [id]/
+│       ├── handler.rb
+│       └── cancel/
+│           └── handler.rb
+├── accounts/
+│   └── [id]/handler.rb
+├── inventory/
+│   └── [id]/handler.rb
+├── recommendations/
+│   └── [id]/handler.rb
+├── search/handler.rb
+├── sessions/handler.rb
+├── profiles/
+│   └── [id]/preferences/handler.rb
+└── healthz/handler.rb
+```
+
+`OresApp::Routes.handler_relative_path` deterministically maps each route-table entry to its source handler. Rails tests assert the complete mapping, and lambda codegen aborts if any declared route lacks its committed `handler.rb`.
+
+## Lambda handler topology
+
+Every source route gets its own URL-shaped generated handler wrapper:
+
+```text
+generated/lambda/routes/users/[id]/handler.rb
+generated/lambda/routes/carts/[id]/handler.rb
+generated/lambda/routes/orders/[id]/handler.rb
+generated/lambda/routes/orders/[id]/cancel/handler.rb
 ...
 ```
 
-Codegen also emits higher-level grouped handlers with a switch over the member routes:
+The generated wrapper calls the corresponding committed source handler. Codegen also emits higher-level grouped handlers with a switch over the member routes:
 
 ```text
 generated/lambda/groups/users/handler.rb
@@ -53,21 +91,27 @@ ORES_BUILD_TARGET=lambda ORES_LAMBDA_HANDLER_GRANULARITY=group ruby bin/build-ru
 
 `route` is the default because one generated `handler.rb` per route is the smallest known-good lambda unit. `group` lets an isolate load a larger route family (for example all order routes) and switch on the matched route without changing source code.
 
-The generated `manifest.json` records both handler paths for every route plus its middleware, group, and isolate pool. A supervisor can therefore pool isolates by route, group, privilege class, deployment generation, or another policy without asking Rails to route the request.
+The generated `manifest.json` records the committed source handler, generated route handler, grouped handler, middleware, group, and isolate pool for every route. A supervisor can therefore pool isolates by route, group, privilege class, deployment generation, or another policy without asking Rails to route the request.
 
 ## Request flow
 
 ```text
-HTTP -> shared route match -> shared middleware -> isolate-pool selection -> generated route/group handler -> shared business code
+HTTP -> shared route match -> shared middleware -> isolate-pool selection -> committed route handler -> shared business code
 ```
 
-The Rails path is instead:
+The Rails path is:
 
 ```text
-HTTP -> Rails router generated from shared route table -> thin controller adapter -> shared dispatcher/middleware/business code
+HTTP -> Rails router generated from shared route table -> thin controller adapter -> shared dispatcher/middleware -> committed route handler -> shared business code
 ```
 
-The two modes share application semantics, not Rails runtime state.
+The lambda/Graal path is:
+
+```text
+HTTP/event -> shared route match -> shared middleware -> generated route/group wrapper -> committed route handler -> shared business code
+```
+
+The two modes share application semantics and source handlers, not Rails runtime state.
 
 ## Rails concurrency contract
 
@@ -92,4 +136,4 @@ The Graal path uses the same rule at a smaller scale: one long-lived Ruby Contex
 
 ## Tests
 
-Rails tests remain under `test/`. No-Rails lambda tests live under `lambda-test/` so the lambda contract can explicitly assert that the `Rails` constant was never loaded.
+Rails tests remain under `test/`. No-Rails lambda tests live under `lambda-test/` so the lambda contract can explicitly assert that the `Rails` constant was never loaded. CI additionally verifies the committed route tree and the URL-shaped generated route tree.

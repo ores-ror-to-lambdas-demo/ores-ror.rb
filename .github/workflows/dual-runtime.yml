@@ -71,15 +71,23 @@ jobs:
         with:
           ruby-version: '3.4'
           bundler-cache: true
-      - run: ruby bin/build-runtime
-      - name: Verify per-route and grouped handler artifacts
+      - name: Verify committed filesystem route tree
         run: |
-          test -f generated/lambda/routes/user/handler.rb
-          test -f generated/lambda/routes/order/handler.rb
-          test -f generated/lambda/routes/cancel_order/handler.rb
+          test -f 'routes/users/[id]/handler.rb'
+          test -f 'routes/orders/[id]/handler.rb'
+          test -f 'routes/orders/[id]/cancel/handler.rb'
+          test -f 'routes/profiles/[id]/preferences/handler.rb'
+          test "$(find routes -name handler.rb | wc -l)" -eq 13
+      - run: ruby bin/build-runtime
+      - name: Verify URL-shaped generated route and grouped handler artifacts
+        run: |
+          test -f 'generated/lambda/routes/users/[id]/handler.rb'
+          test -f 'generated/lambda/routes/orders/[id]/handler.rb'
+          test -f 'generated/lambda/routes/orders/[id]/cancel/handler.rb'
           test -f generated/lambda/groups/users/handler.rb
           test -f generated/lambda/groups/orders/handler.rb
-          grep -q '"handler_granularity": "route"' generated/lambda/manifest.json
+          grep -Fq '"handler_granularity": "route"' generated/lambda/manifest.json
+          grep -Fq '"source_handler": "routes/users/[id]/handler.rb"' generated/lambda/manifest.json
           ! grep -R -E 'config/environment|Rails\.application' generated/lambda
           test -z "$(git status --porcelain --untracked-files=all -- generated/)"
       - run: bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
@@ -103,6 +111,7 @@ jobs:
           grep -q '"handler_granularity": "group"' generated/lambda/manifest.json
           grep -q 'case route.name' generated/lambda/groups/orders/handler.rb
           grep -q 'OresGenerated::Groups::Orders' generated/lambda/entrypoint.rb
+          grep -Fq 'require_relative "../../routes/orders/[id]/handler"' generated/lambda/groups/orders/handler.rb
           ! grep -R -E 'config/environment|Rails\.application' generated/lambda
       - run: bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
       - run: bundle exec ruby lambda-test/aws_lambda_adapter_test.rb

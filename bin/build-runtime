@@ -9,15 +9,23 @@ def ruby_const(value)
   value.to_s.split(/[^A-Za-z0-9]+/).reject(&:empty?).map { |part| part[0].upcase + part[1..].to_s }.join
 end
 
+def generated_route_relative_path(route)
+  OresApp::Routes.handler_relative_path(route).delete_prefix("routes/")
+end
+
+def generated_route_require_path(route)
+  generated_route_relative_path(route).delete_suffix(".rb")
+end
+
 def write_route_handler(lambda_dir, route)
-  route_dir = File.join(lambda_dir, "routes", route.name)
-  FileUtils.mkdir_p(route_dir)
+  handler_path = File.join(lambda_dir, "routes", generated_route_relative_path(route))
+  FileUtils.mkdir_p(File.dirname(handler_path))
   const_name = ruby_const(route.name)
-  File.write(File.join(route_dir, "handler.rb"), <<~RUBY)
+  File.write(handler_path, <<~RUBY)
     # frozen_string_literal: true
     # GENERATED FILE. DO NOT EDIT OR COMMIT.
 
-    require "ores_app/handlers"
+    require "ores_app/route_handlers"
 
     module OresGenerated
       module Routes
@@ -25,7 +33,7 @@ def write_route_handler(lambda_dir, route)
           module_function
 
           def call(request)
-            OresApp::Handlers.call(#{route.handler.inspect}, request)
+            OresApp::RouteHandlers.call(#{route.name.inspect}, request)
           end
         end
       end
@@ -36,7 +44,7 @@ end
 def write_group_handler(lambda_dir, group, routes)
   group_dir = File.join(lambda_dir, "groups", group)
   FileUtils.mkdir_p(group_dir)
-  requires = routes.map { |route| %(require_relative "../../routes/#{route.name}/handler") }.join("\n")
+  requires = routes.map { |route| %(require_relative "../../routes/#{generated_route_require_path(route)}") }.join("\n")
   cases = routes.map do |route|
     %(when #{route.name.inspect} then OresGenerated::Routes::#{ruby_const(route.name)}.call(request))
   end.join("\n          ")
@@ -67,7 +75,7 @@ end
 
 def write_entrypoint(lambda_dir, granularity, routes)
   if granularity == "route"
-    requires = routes.map { |route| %(require_relative "routes/#{route.name}/handler") }.join("\n")
+    requires = routes.map { |route| %(require_relative "routes/#{generated_route_require_path(route)}") }.join("\n")
     cases = routes.map do |route|
       %(when #{route.name.inspect} then OresGenerated::Routes::#{ruby_const(route.name)}.call(request))
     end.join("\n            ")
@@ -137,6 +145,11 @@ when "lambda"
   FileUtils.mkdir_p(lambda_dir)
   routes = OresApp::Routes::TABLE
 
+  missing_handlers = routes.reject { |route| File.file?(OresApp::Routes.handler_path(route)) }
+  unless missing_handlers.empty?
+    abort "missing committed route handlers: #{missing_handlers.map { |route| OresApp::Routes.handler_relative_path(route) }.join(", ")}"
+  end
+
   routes.each { |route| write_route_handler(lambda_dir, route) }
   routes.group_by(&:group).each { |group, grouped_routes| write_group_handler(lambda_dir, group, grouped_routes) }
   write_entrypoint(lambda_dir, granularity, routes)
@@ -150,7 +163,8 @@ when "lambda"
       middleware: route.middleware,
       group: route.group,
       pool: route.pool,
-      route_handler: "generated/lambda/routes/#{route.name}/handler.rb",
+      source_handler: OresApp::Routes.handler_relative_path(route),
+      route_handler: "generated/lambda/routes/#{generated_route_relative_path(route)}",
       group_handler: "generated/lambda/groups/#{route.group}/handler.rb"
     }
   end
@@ -166,7 +180,7 @@ when "lambda"
   }
 
   File.write(File.join(lambda_dir, "manifest.json"), JSON.pretty_generate(manifest) + "\n")
-  warn "build target=lambda: generated per-route and grouped handlers in #{lambda_dir}; active granularity=#{granularity}; Rails not booted"
+  warn "build target=lambda: generated URL-shaped route handlers in #{lambda_dir}; active granularity=#{granularity}; Rails not booted"
 else
   abort "unsupported ORES_BUILD_TARGET=#{target.inspect}; expected rails or lambda"
 end
