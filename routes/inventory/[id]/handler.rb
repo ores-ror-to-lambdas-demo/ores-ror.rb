@@ -1,13 +1,9 @@
 # frozen_string_literal: true
 
-module OresApp
-  module RouteHandlers
-    module Inventory
-      module_function
-
-      def call(request)
-        Handlers.call("inventory", request)
-      end
-    end
-  end
+OresApp::Routes.register(
+  verb: "GET", name: "inventory", handler: "inventory", group: "inventory", pool: "inventory",
+  source: "routes/inventory/[id]/handler.rb"
+) do |request|
+  id = OresApp::RouteHandlers.safe_id(request)
+  OresApp::RouteHandlers.proxy(:get, "/inventory/#{id}")
 end

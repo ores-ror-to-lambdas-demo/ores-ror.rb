@@ -1,13 +1,9 @@
 # frozen_string_literal: true
 
-module OresApp
-  module RouteHandlers
-    module CheckoutSession
-      module_function
-
-      def call(request)
-        Handlers.call("checkout_session", request)
-      end
-    end
-  end
+OresApp::Routes.register(
+  verb: "POST", name: "checkout_session", handler: "checkout_session", group: "checkout", pool: "checkout",
+  source: "routes/checkout-sessions/[id]/handler.rb"
+) do |request|
+  id = OresApp::RouteHandlers.safe_id(request)
+  OresApp::RouteHandlers.proxy(:post, "/checkout-sessions/#{id}", body: request["body"])
 end

@@ -1,13 +1,9 @@
 # frozen_string_literal: true
 
-module OresApp
-  module RouteHandlers
-    module Account
-      module_function
-
-      def call(request)
-        Handlers.call("account", request)
-      end
-    end
-  end
+OresApp::Routes.register(
+  verb: "GET", name: "account", handler: "account", group: "accounts", pool: "accounts",
+  source: "routes/accounts/[id]/handler.rb"
+) do |request|
+  id = OresApp::RouteHandlers.safe_id(request)
+  OresApp::RouteHandlers.proxy(:get, "/accounts/#{id}")
 end

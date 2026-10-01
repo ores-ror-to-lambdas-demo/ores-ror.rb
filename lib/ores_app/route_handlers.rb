@@ -1,32 +1,53 @@
 # frozen_string_literal: true
 
-require_relative "handlers"
-require_relative "routes"
+require_relative "http_database"
 
 module OresApp
   module RouteHandlers
     module_function
 
     def call(route_or_name, request)
-      route = resolve_route(route_or_name)
-      handler_path = Routes.handler_path(route)
-      raise LoadError, "missing route handler: #{Routes.handler_relative_path(route)}" unless File.file?(handler_path)
-
-      require handler_path
-      const_get(const_name(route.name), false).call(request)
+      route = if route_or_name.respond_to?(:call) && route_or_name.respond_to?(:name)
+        route_or_name
+      else
+        OresApp::Routes.fetch(route_or_name)
+      end
+      route.call(request)
     end
 
-    def resolve_route(route_or_name)
-      return route_or_name if route_or_name.is_a?(Routes::Route)
-
-      Routes::TABLE.find { |route| route.name == route_or_name.to_s } ||
-        raise(KeyError, "unknown route handler #{route_or_name.inspect}")
+    def proxy(method, path, body: nil, query: nil)
+      result = HttpDatabase.request(method, path, body: body, query: query || {})
+      response(result.fetch(:status), result.fetch(:body))
     end
-    private_class_method :resolve_route
 
-    def const_name(value)
-      value.to_s.split(/[^A-Za-z0-9]+/).reject(&:empty?).map { |part| part[0].upcase + part[1..].to_s }.join
+    def safe_id(request)
+      value = request.fetch("path_params", {}).fetch("id", "").to_s
+      raise ArgumentError, "invalid id" unless value.match?(/\A[A-Za-z0-9_-]{1,128}\z/)
+      value
     end
-    private_class_method :const_name
+
+    def health(request)
+      execution_mode = if defined?(ORES_EXECUTION_MODE)
+        ORES_EXECUTION_MODE
+      else
+        ENV.fetch("ORES_BUILD_TARGET", "rails")
+      end
+
+      response(200, {
+        ok: true,
+        service: "ores-ror.rb",
+        runtime: HttpDatabase.runtime_name,
+        execution_mode: execution_mode,
+        request_id: request["request_id"]
+      })
+    end
+
+    def response(status, body)
+      {
+        status: Integer(status),
+        headers: { "content-type" => "application/json; charset=utf-8" },
+        body: body
+      }
+    end
   end
 end

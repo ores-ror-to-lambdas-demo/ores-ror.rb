@@ -1,13 +1,8 @@
 # frozen_string_literal: true
 
-module OresApp
-  module RouteHandlers
-    module Search
-      module_function
-
-      def call(request)
-        Handlers.call("search", request)
-      end
-    end
-  end
+OresApp::Routes.register(
+  verb: "GET", name: "search", handler: "search", group: "search", pool: "search",
+  source: "routes/search/handler.rb"
+) do |request|
+  OresApp::RouteHandlers.proxy(:get, "/search", query: request["query"])
 end

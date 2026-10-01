@@ -1,13 +1,8 @@
 # frozen_string_literal: true
 
-module OresApp
-  module RouteHandlers
-    module Sessions
-      module_function
-
-      def call(request)
-        Handlers.call("create_session", request)
-      end
-    end
-  end
+OresApp::Routes.register(
+  verb: "POST", name: "sessions", handler: "create_session", group: "sessions", pool: "sessions",
+  source: "routes/sessions/handler.rb"
+) do |request|
+  OresApp::RouteHandlers.proxy(:post, "/sessions", body: request["body"])
 end
