@@ -5,6 +5,122 @@ require "fileutils"
 require "json"
 require_relative "../lib/ores_app/routes"
 
+def ruby_const(value)
+  value.to_s.split(/[^A-Za-z0-9]+/).reject(&:empty?).map { |part| part[0].upcase + part[1..].to_s }.join
+end
+
+def write_route_handler(lambda_dir, route)
+  route_dir = File.join(lambda_dir, "routes", route.name)
+  FileUtils.mkdir_p(route_dir)
+  const_name = ruby_const(route.name)
+  File.write(File.join(route_dir, "handler.rb"), <<~RUBY)
+    # frozen_string_literal: true
+    # GENERATED FILE. DO NOT EDIT OR COMMIT.
+
+    require "ores_app/handlers"
+
+    module OresGenerated
+      module Routes
+        module #{const_name}
+          module_function
+
+          def call(request)
+            OresApp::Handlers.call(#{route.handler.inspect}, request)
+          end
+        end
+      end
+    end
+  RUBY
+end
+
+def write_group_handler(lambda_dir, group, routes)
+  group_dir = File.join(lambda_dir, "groups", group)
+  FileUtils.mkdir_p(group_dir)
+  requires = routes.map { |route| %(require_relative "../../routes/#{route.name}/handler") }.join("\n")
+  cases = routes.map do |route|
+    %(when #{route.name.inspect} then OresGenerated::Routes::#{ruby_const(route.name)}.call(request))
+  end.join("\n          ")
+
+  File.write(File.join(group_dir, "handler.rb"), <<~RUBY)
+    # frozen_string_literal: true
+    # GENERATED FILE. DO NOT EDIT OR COMMIT.
+
+    #{requires}
+
+    module OresGenerated
+      module Groups
+        module #{ruby_const(group)}
+          module_function
+
+          def call(route, request)
+            case route.name
+            #{cases}
+            else
+              raise ArgumentError, "route \#{route.name.inspect} does not belong to group #{group}"
+            end
+          end
+        end
+      end
+    end
+  RUBY
+end
+
+def write_entrypoint(lambda_dir, granularity, routes)
+  if granularity == "route"
+    requires = routes.map { |route| %(require_relative "routes/#{route.name}/handler") }.join("\n")
+    cases = routes.map do |route|
+      %(when #{route.name.inspect} then OresGenerated::Routes::#{ruby_const(route.name)}.call(request))
+    end.join("\n            ")
+    resolver = <<~RUBY
+      def invoke(route, request)
+        case route.name
+        #{cases}
+        else
+          raise ArgumentError, "no generated route handler for \#{route.name.inspect}"
+        end
+      end
+    RUBY
+  else
+    groups = routes.group_by(&:group)
+    requires = groups.keys.sort.map { |group| %(require_relative "groups/#{group}/handler") }.join("\n")
+    cases = groups.keys.sort.map do |group|
+      %(when #{group.inspect} then OresGenerated::Groups::#{ruby_const(group)}.call(route, request))
+    end.join("\n            ")
+    resolver = <<~RUBY
+      def invoke(route, request)
+        case route.group
+        #{cases}
+        else
+          raise ArgumentError, "no generated group handler for \#{route.group.inspect}"
+        end
+      end
+    RUBY
+  end
+
+  File.write(File.join(lambda_dir, "entrypoint.rb"), <<~RUBY)
+    # frozen_string_literal: true
+    # GENERATED FILE. DO NOT EDIT OR COMMIT.
+
+    app_root = File.expand_path("../..", __dir__)
+    $LOAD_PATH.unshift(File.join(app_root, "lib")) unless $LOAD_PATH.include?(File.join(app_root, "lib"))
+
+    require "ores_app/dispatcher"
+    #{requires}
+
+    module OresGenerated
+      module LambdaEntrypoint
+        module_function
+
+        #{resolver.lines.map { |line| "        #{line}" }.join}
+
+        def call(request)
+          OresApp::Dispatcher.call(request, invoker: method(:invoke))
+        end
+      end
+    end
+  RUBY
+end
+
 target = ENV.fetch("ORES_BUILD_TARGET", "rails").downcase
 output_root = File.expand_path(ENV.fetch("ORES_BUILD_OUTPUT", "../generated"), __dir__)
 lambda_dir = File.join(output_root, "lambda")
@@ -14,39 +130,43 @@ when "rails"
   FileUtils.rm_rf(lambda_dir)
   warn "build target=rails: no lambda runtime generated; boot Rails normally"
 when "lambda"
+  granularity = ENV.fetch("ORES_LAMBDA_HANDLER_GRANULARITY", "route").downcase
+  abort "ORES_LAMBDA_HANDLER_GRANULARITY must be route or group" unless %w[route group].include?(granularity)
+
+  FileUtils.rm_rf(lambda_dir)
   FileUtils.mkdir_p(lambda_dir)
+  routes = OresApp::Routes::TABLE
+
+  routes.each { |route| write_route_handler(lambda_dir, route) }
+  routes.group_by(&:group).each { |group, grouped_routes| write_group_handler(lambda_dir, group, grouped_routes) }
+  write_entrypoint(lambda_dir, granularity, routes)
+
+  route_manifest = routes.map do |route|
+    {
+      method: route.verb,
+      path: route.path,
+      handler: route.handler,
+      name: route.name,
+      middleware: route.middleware,
+      group: route.group,
+      pool: route.pool,
+      route_handler: "generated/lambda/routes/#{route.name}/handler.rb",
+      group_handler: "generated/lambda/groups/#{route.group}/handler.rb"
+    }
+  end
 
   manifest = {
-    "schema" => "ores-lambda-manifest/v1",
+    "schema" => "ores-lambda-manifest/v2",
     "application" => "ores-ror.rb",
     "entrypoint" => "generated/lambda/entrypoint.rb",
     "runtime" => "ruby",
     "rails_boot" => false,
-    "routes" => OresApp::Routes.manifest
+    "handler_granularity" => granularity,
+    "routes" => route_manifest
   }
 
   File.write(File.join(lambda_dir, "manifest.json"), JSON.pretty_generate(manifest) + "\n")
-  File.write(File.join(lambda_dir, "entrypoint.rb"), <<~'RUBY')
-    # frozen_string_literal: true
-    # GENERATED FILE. DO NOT EDIT OR COMMIT.
-
-    app_root = File.expand_path("../..", __dir__)
-    $LOAD_PATH.unshift(File.join(app_root, "lib")) unless $LOAD_PATH.include?(File.join(app_root, "lib"))
-
-    require "ores_app/dispatcher"
-
-    module OresGenerated
-      module LambdaEntrypoint
-        module_function
-
-        def call(request)
-          OresApp::Dispatcher.call(request)
-        end
-      end
-    end
-  RUBY
-
-  warn "build target=lambda: generated #{lambda_dir} without booting Rails"
+  warn "build target=lambda: generated per-route and grouped handlers in #{lambda_dir}; active granularity=#{granularity}; Rails not booted"
 else
   abort "unsupported ORES_BUILD_TARGET=#{target.inspect}; expected rails or lambda"
 end
