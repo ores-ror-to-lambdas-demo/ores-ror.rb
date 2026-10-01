@@ -119,12 +119,7 @@ module OresGraal
           request, reply = job
           begin
             foreign_wire = invoker.call(OresGraal.encode_wire(request), @host_http_bridge)
-            payload = OresGraal.decode_wire(foreign_wire)
-            if payload.fetch("ok")
-              reply << [:ok, payload]
-            else
-              reply << [:error, worker_error(payload)]
-            end
+            reply << [:ok, OresGraal.decode_wire(foreign_wire)]
           rescue StandardError => error
             reply << [:error, error]
           end
@@ -132,15 +127,6 @@ module OresGraal
       end
     rescue StandardError => error
       @ready << [:error, error] unless ready_sent
-    end
-
-    def worker_error(payload)
-      message = "#{payload.fetch("error_class", "RuntimeError")}: #{payload.fetch("message", "worker failed")}" 
-      if payload["error_class"] == "OresApp::HttpDatabase::Error"
-        OresApp::HttpDatabase::Error.new(payload.fetch("message", "data bridge failed"))
-      else
-        RuntimeError.new(message)
-      end
     end
 
     def bootstrap_source
@@ -175,27 +161,32 @@ module OresGraal
             Marshal.dump(value).unpack1("H*")
           end
 
+          def worker_metadata
+            {
+              "model" => "graal-inner-context",
+              "context_id" => CONTEXT_ID,
+              "pool_key" => POOL_KEY,
+              "handler" => EXPECTED_ROUTE.to_s,
+              "invocations" => @invocations
+            }
+          end
+
           def call_wire(request_wire, host_http_bridge)
             $ores_gs_http = host_http_bridge
             request = decode_wire(request_wire)
-            response = HANDLER.call(request)
             @invocations += 1
+            response = HANDLER.call(request)
             encode_wire(
               "ok" => true,
               "response" => response,
-              "worker" => {
-                "model" => "graal-inner-context",
-                "context_id" => CONTEXT_ID,
-                "pool_key" => POOL_KEY,
-                "handler" => EXPECTED_ROUTE.to_s,
-                "invocations" => @invocations
-              }
+              "worker" => worker_metadata
             )
           rescue StandardError => error
             encode_wire(
               "ok" => false,
               "error_class" => error.class.name,
-              "message" => error.message.to_s
+              "message" => error.message.to_s,
+              "worker" => worker_metadata
             )
           ensure
             $ores_gs_http = nil
@@ -264,8 +255,12 @@ module OresGraal
     def call(request)
       OresApp::Dispatcher.call(request, invoker: lambda do |route, normalized_request|
         payload = pool_for(route).call(normalized_request)
-        response = payload.fetch("response")
         worker = payload.fetch("worker")
+        response = if payload.fetch("ok")
+                     payload.fetch("response")
+                   else
+                     error_response(payload)
+                   end
         headers = response[:headers] ||= {}
         headers["x-ores-worker-model"] = worker.fetch("model")
         headers["x-ores-worker-context"] = worker.fetch("context_id")
@@ -306,6 +301,20 @@ module OresGraal
     end
 
     private
+
+    def error_response(payload)
+      error_class = payload.fetch("error_class", "RuntimeError")
+      status = case error_class
+               when "OresApp::HttpDatabase::Error" then 502
+               when "ArgumentError", "KeyError" then 400
+               else 500
+               end
+      {
+        status: status,
+        headers: { "content-type" => "application/json; charset=utf-8" },
+        body: { error: payload.fetch("message", "worker failed") }
+      }
+    end
 
     def pool_for(route)
       key = OresApp::Routes.handler_relative_path(route)
