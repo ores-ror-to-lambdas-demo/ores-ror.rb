@@ -4,7 +4,6 @@ require "json"
 require "uri"
 require_relative "routes"
 require_relative "middleware"
-require_relative "handlers"
 
 module OresApp
   module Dispatcher
@@ -22,11 +21,7 @@ module OresApp
       request["isolate_pool"] = route.pool
 
       result = Middleware.call(route.middleware, request) do
-        if invoker
-          invoker.call(route, request)
-        else
-          Handlers.call(route.handler, request)
-        end
+        invoker ? invoker.call(route, request) : route.call(request)
       end
 
       serialize_response(result)
