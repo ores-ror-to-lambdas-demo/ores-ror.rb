@@ -1,6 +1,6 @@
 # ores-ror.rb
 
-One repository, two build modes, one route/middleware/business-logic source of truth.
+One repository, two build modes, one application contract.
 
 ## Invariant
 
@@ -10,59 +10,102 @@ The checkout is not edited to switch runtimes. Environment variables select the 
 # ordinary Rails application
 ORES_BUILD_TARGET=rails bundle exec rails server
 
-# lambda artifact generation; no Rails boot
+# Lambda/Graal artifact generation; no Rails boot
 ORES_BUILD_TARGET=lambda ruby bin/build-runtime
 ```
 
-Generated lambda artifacts live under `generated/` and are intentionally ignored by Git.
+Generated artifacts live under `generated/` and are intentionally ignored by Git.
 
-## Shared application contract
+## Source layout
 
-`lib/ores_app/routes.rb` is Rails-independent and owns the route table, middleware list, handler ID, handler group, and isolate-pool key. Every declared URL also owns a committed filesystem handler under `routes/`. `config/routes.rb` installs the same route table into Rails, while both Rails and generated lambda/Graal dispatch execute the committed route handler before entering shared business code.
+Rails stays conventional. Controllers remain under `app/controllers`, Rails views remain under `app/views`, and `config/routes.rb` is the Rails router.
 
-Rails mode boots Rails normally. Lambda mode must never require `config/environment`, `Rails.application`, Rack dispatch, Rails initializers, or Puma.
-
-## Source route filesystem
-
-Routes are real source directories, not only rows in `lib/ores_app/routes.rb`. Dynamic URL parameters use `[name]` in the filesystem so the repository remains portable across operating systems; for example `:id` maps to `[id]`.
+The committed `routes/` tree is a separate deployment surface for FaaS/Graal handlers. It does **not** need to be co-located with Rails controllers or views.
 
 ```text
+app/
+├── controllers/
+│   ├── application_controller.rb
+│   ├── users_controller.rb
+│   ├── carts_controller.rb
+│   ├── orders_controller.rb
+│   └── ...
+└── views/
+    └── ...
+
+config/
+└── routes.rb
+
 routes/
 ├── users/
-│   └── [id]/
-│       └── handler.rb
+│   └── [id]/handler.rb
 ├── carts/
-│   └── [id]/
-│       └── handler.rb
-├── checkout-sessions/
-│   └── [id]/
-│       └── handler.rb
-├── products/
-│   └── [id]/
-│       └── handler.rb
+│   └── [id]/handler.rb
 ├── orders/
 │   └── [id]/
 │       ├── handler.rb
-│       └── cancel/
-│           └── handler.rb
-├── accounts/
-│   └── [id]/handler.rb
-├── inventory/
-│   └── [id]/handler.rb
-├── recommendations/
-│   └── [id]/handler.rb
-├── search/handler.rb
-├── sessions/handler.rb
-├── profiles/
-│   └── [id]/preferences/handler.rb
-└── healthz/handler.rb
+│       └── cancel/handler.rb
+└── ...
 ```
 
-`OresApp::Routes.handler_relative_path` deterministically maps each route-table entry to its source handler. Rails tests assert the complete mapping, and lambda codegen aborts if any declared route lacks its committed `handler.rb`.
+The Rails and FaaS surfaces are adapters around the same shared application/business logic. The handler tree should not duplicate controllers or business rules.
 
-## Lambda handler topology
+## Shared route contract
 
-Every source route gets its own URL-shaped generated handler wrapper:
+`lib/ores_app/routes.rb` is Rails-independent and records, for every route:
+
+- HTTP method and URL path
+- logical handler ID
+- middleware
+- handler group / isolate pool
+- Rails controller and action
+- committed filesystem handler path
+
+For example:
+
+```text
+GET /users/:id
+├── Rails: UsersController#show
+└── FaaS/Graal: routes/users/[id]/handler.rb
+```
+
+`config/routes.rb` installs the shared table into Rails. The route contract validator rejects duplicate routes, duplicate names, missing Rails controllers, missing committed handlers, and orphan committed handlers.
+
+Run it directly without booting Rails:
+
+```sh
+ruby bin/verify-routes
+```
+
+## Request flow
+
+Rails mode:
+
+```text
+HTTP
+  -> config/routes.rb
+  -> UsersController#show / OrdersController#cancel / ...
+  -> shared dispatcher + middleware
+  -> committed routes/**/handler.rb
+  -> shared application/business logic
+```
+
+Lambda/Graal mode:
+
+```text
+HTTP/event
+  -> shared route match
+  -> shared middleware
+  -> generated route/group wrapper
+  -> committed routes/**/handler.rb
+  -> shared application/business logic
+```
+
+Rails controllers and FaaS handlers therefore share semantics without requiring the Lambda/Graal runtime to boot Rails.
+
+## Generated Lambda/Graal topology
+
+The build step validates the committed route/controller contract and then generates URL-shaped wrappers:
 
 ```text
 generated/lambda/routes/users/[id]/handler.rb
@@ -72,68 +115,46 @@ generated/lambda/routes/orders/[id]/cancel/handler.rb
 ...
 ```
 
-The generated wrapper calls the corresponding committed source handler. Codegen also emits higher-level grouped handlers with a switch over the member routes:
+It also emits optional grouped handlers:
 
 ```text
 generated/lambda/groups/users/handler.rb
-generated/lambda/groups/carts/handler.rb
 generated/lambda/groups/orders/handler.rb
 generated/lambda/groups/system/handler.rb
 ...
 ```
 
-Choose the active dispatch layer at build time:
+Choose the active dispatch granularity at build time:
 
 ```sh
 ORES_BUILD_TARGET=lambda ORES_LAMBDA_HANDLER_GRANULARITY=route ruby bin/build-runtime
 ORES_BUILD_TARGET=lambda ORES_LAMBDA_HANDLER_GRANULARITY=group ruby bin/build-runtime
 ```
 
-`route` is the default because one generated `handler.rb` per route is the smallest known-good lambda unit. `group` lets an isolate load a larger route family (for example all order routes) and switch on the matched route without changing source code.
+`route` gives one generated wrapper per URL route. `group` allows a larger isolate to load a family such as all order routes and switch on the matched route. Neither mode changes the Rails source tree.
 
-The generated `manifest.json` records the committed source handler, generated route handler, grouped handler, middleware, group, and isolate pool for every route. A supervisor can therefore pool isolates by route, group, privilege class, deployment generation, or another policy without asking Rails to route the request.
+The generated manifest records both sides of the contract, including the Rails controller/action, committed source handler, generated route handler, grouped handler, middleware, group, and isolate pool.
 
-## Request flow
+## Graal/TruffleRuby packaging
 
-```text
-HTTP -> shared route match -> shared middleware -> isolate-pool selection -> committed route handler -> shared business code
-```
+`graal/bootstrap.rb` loads the generated Lambda entrypoint and does not boot Rails. The runtime image contains the shared `lib/` application code, committed `routes/` handlers, and generated wrappers.
 
-The Rails path is:
-
-```text
-HTTP -> Rails router generated from shared route table -> thin controller adapter -> shared dispatcher/middleware -> committed route handler -> shared business code
-```
-
-The lambda/Graal path is:
-
-```text
-HTTP/event -> shared route match -> shared middleware -> generated route/group wrapper -> committed route handler -> shared business code
-```
-
-The two modes share application semantics and source handlers, not Rails runtime state.
+This means the same Git repository remains a normal Rails app while also producing independently deployable TruffleRuby/Graal route or grouped-handler artifacts.
 
 ## Rails concurrency contract
 
-Rails remains one ordinary Rails application. It is not copied into each Lambda or Graal context.
+Rails remains one ordinary Rails application. Puma owns a bounded reusable request-thread pool. Request identity must never be inferred from `Thread.current` identity.
 
-Puma owns a bounded reusable request-thread pool. Production defaults are 50 minimum and 300 maximum threads, configurable with `RAILS_MIN_THREADS` and `RAILS_MAX_THREADS`; development and test keep smaller defaults. A physical thread may serve many requests over its lifetime.
+The Graal path follows the same semantic rule: long-lived contexts/threads may serve many requests, while request identity travels explicitly in the invocation envelope.
 
-The runtime contract is therefore:
+## CI
 
-```text
-request identity != Thread.current identity
-request lifetime  != worker-thread lifetime
-```
+CI verifies all of the following:
 
-Rails and third-party gems may continue to use `Thread.current` in the normal Ruby/Rails way, but request-specific thread-local state must obey the normal request cleanup lifecycle before that worker serves another request.
-
-The Graal path uses the same rule at a smaller scale: one long-lived Ruby Context per isolate, with a bounded host-owned pool of up to five reusable threads. Request identity is carried explicitly in the invocation envelope.
-
-## Graal/TruffleRuby
-
-`graal/bootstrap.rb` loads only `generated/lambda/entrypoint.rb`. It does not boot Rails. The Graal supervisor can keep pools of long-lived TruffleRuby contexts and multiplex many requests through the generated route/group handlers, subject to the supervisor's concurrency/lifetime policy.
-
-## Tests
-
-Rails tests remain under `test/`. No-Rails lambda tests live under `lambda-test/` so the lambda contract can explicitly assert that the `Rails` constant was never loaded. CI additionally verifies the committed route tree and the URL-shaped generated route tree.
+- MRI Rails tests and server boot
+- TruffleRuby Rails tests and server boot
+- exact Rails-controller / committed-handler route parity
+- per-route Lambda code generation
+- grouped Lambda code generation
+- no Rails boot in Lambda/Graal artifacts
+- TruffleRuby AWS Lambda container execution
