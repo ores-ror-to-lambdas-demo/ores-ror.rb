@@ -48,6 +48,57 @@ def group_unit_relative(group, prefix: "groups")
   File.join(prefix, safe, "handler.rb")
 end
 
+def physical_route_relative(route)
+  segments = route.fetch(:path).split("/").reject(&:empty?).map { |segment| fs_segment(segment) }
+  segments = ["_root"] if segments.empty?
+  File.join("routes", *segments, "handler.rb")
+end
+
+def physical_group_relative(group)
+  safe = group.to_s.gsub(/[^A-Za-z0-9._-]+/, "-")
+  File.join("routes", safe, "handler.rb")
+end
+
+def physical_route_const(route)
+  ruby_const(route.fetch(:name))
+end
+
+FORBIDDEN_HANDLER_SOURCE = {
+  /\brequire(?:_relative)?\b/ => "dynamic require",
+  /\b(?:File|Dir|IO)\s*\./ => "filesystem API",
+  /\b(?:Process\.|system\s*\(|exec\s*\(|spawn\s*\(|fork\b)/ => "process API",
+  /\b(?:Socket|TCPSocket|UDPSocket|UNIXSocket)\b/ => "raw socket API",
+  /\b(?:Fiddle|FFI)\b/ => "native FFI",
+  /\bThread\s*\.\s*(?:new|start|fork)\b/ => "guest-created thread"
+}.freeze
+
+def validate_physical_handlers!(routes)
+  route_sources = routes.map { |route| physical_route_relative(route) }
+  duplicates = route_sources.group_by(&:itself).select { |_path, rows| rows.length > 1 }.keys
+  abort "multiple Rails routes map to the same physical handler path: #{duplicates.join(", ")}" unless duplicates.empty?
+
+  missing = route_sources.reject { |relative| File.file?(File.join(ROOT, relative)) }
+  abort "missing committed physical route handlers: #{missing.join(", ")}" unless missing.empty?
+
+  route_sources.each do |relative|
+    source = File.read(File.join(ROOT, relative))
+    FORBIDDEN_HANDLER_SOURCE.each do |pattern, label|
+      abort "physical handler #{relative} uses forbidden #{label}" if source.match?(pattern)
+    end
+  end
+
+  group_sources = routes.map { |route| physical_group_relative(route.fetch(:group)) }.uniq.select do |relative|
+    File.file?(File.join(ROOT, relative))
+  end
+  actual = Dir.glob(File.join(ROOT, "routes", "**", "handler.rb")).sort.map do |path|
+    Pathname(path).relative_path_from(Pathname(ROOT)).to_s
+  end
+  allowed = (route_sources + group_sources).uniq.sort
+  unexpected = actual - allowed
+  abort "unmapped physical handler files: #{unexpected.join(", ")}" unless unexpected.empty?
+  true
+end
+
 def route_row(route)
   "OresApp::Routes::Route.new(" \
     "verb: #{route.fetch(:verb).inspect}, " \
@@ -86,10 +137,15 @@ end
 def write_lambda_route_handler(path, route)
   FileUtils.mkdir_p(File.dirname(path))
   const = route_const(route)
+  physical = physical_route_relative(route)
+  physical_source = flatten_ruby_source(File.join(ROOT, physical))
   File.write(path, <<~RUBY)
     # frozen_string_literal: true
     # GENERATED FILE. DO NOT EDIT OR COMMIT.
+    # Physical execution source: #{physical}
     require "ores_app/handlers"
+
+    #{physical_source}
 
     module OresGenerated
       module RouteHandlers
@@ -97,7 +153,7 @@ def write_lambda_route_handler(path, route)
           module_function
 
           def call(request)
-            OresApp::Handlers.call(#{route.fetch(:controller).inspect}, #{route.fetch(:action).inspect}, request)
+            OresApp::PhysicalRouteHandlers::#{physical_route_const(route)}.call(request)
           end
         end
       end
@@ -232,7 +288,7 @@ end
 
 def graal_unit_source(routes)
   cases = routes.map do |route|
-    "when #{route_id(route).inspect} then OresApp::Handlers.call(#{route.fetch(:controller).inspect}, #{route.fetch(:action).inspect}, request)"
+    "when #{route_id(route).inspect} then OresApp::PhysicalRouteHandlers::#{physical_route_const(route)}.call(request)"
   end.join("\n          ")
 
   String.new(<<~RUBY)
@@ -265,7 +321,14 @@ end
 def write_graal_unit(relative, routes)
   path = File.join(GRAAL_DIR, relative)
   FileUtils.mkdir_p(File.dirname(path))
-  source = graal_unit_source(routes)
+  source = String.new("# frozen_string_literal: true\n# GENERATED FILE. DO NOT EDIT OR COMMIT.\n")
+  routes.each do |route|
+    physical = physical_route_relative(route)
+    source << "\n# --- PHYSICAL #{physical} ---\n"
+    source << flatten_ruby_source(File.join(ROOT, physical))
+    source << "\n"
+  end
+  source << graal_unit_source(routes)
   source << "\n# --- graal/bootstrap.rb ---\n"
   source << flatten_ruby_source(File.join(ROOT, "graal/bootstrap.rb"))
   source << "\n"
@@ -297,6 +360,7 @@ when "lambda"
 
   routes = compile_routes
   abort "no statically resolvable application routes found" if routes.empty?
+  validate_physical_handlers!(routes)
   FileUtils.rm_rf(LAMBDA_DIR)
   FileUtils.mkdir_p(LAMBDA_DIR)
   write_generated_routes(File.join(LAMBDA_DIR, "routes.rb"), routes)
@@ -316,11 +380,14 @@ when "lambda"
     "rails_boot" => false,
     "rails_application_initialized" => false,
     "route_source" => "config/routes.rb:ripper-static",
+    "rails_route_authority" => "config/routes.rb",
+    "route_handler_authority" => "routes/**/handler.rb",
     "router_runtime" => "generated-rails-route-contract",
     "middleware_runtime" => "shared-ruby-no-rails-app",
     "handler_granularity" => granularity,
     "routes" => routes.map do |route|
       route_manifest(route).merge(
+        source_handler: physical_route_relative(route),
         route_handler: "generated/lambda/#{route_unit_relative(route)}",
         group_handler: "generated/lambda/#{group_unit_relative(route.fetch(:group))}"
       )
@@ -332,6 +399,7 @@ when "graal"
   abort "Rails must not be loaded during Graal generation" if defined?(Rails)
   routes = compile_routes
   abort "no statically resolvable application routes found" if routes.empty?
+  validate_physical_handlers!(routes)
   FileUtils.rm_rf(GRAAL_DIR)
   write_graal_common
 
@@ -344,7 +412,12 @@ when "graal"
       "key" => "route:#{route_id(route)}",
       "route_ids" => [route_id(route)],
       "group" => route.fetch(:group),
+      "source_handler" => physical_route_relative(route),
       "sources" => ["generated/graal/common.rb", "generated/graal/#{relative}"],
+      "language_context" => "ruby",
+      "context_count" => 1,
+      "host_thread_pool_size" => MAX_GRAAL_THREADS,
+      "request_multiplexing" => true,
       "max_concurrency" => MAX_GRAAL_THREADS
     }
   end
@@ -356,7 +429,12 @@ when "graal"
       "key" => "group:#{group}",
       "route_ids" => grouped.map { |route| route_id(route) },
       "group" => group,
+      "source_handlers" => grouped.map { |route| physical_route_relative(route) },
       "sources" => ["generated/graal/common.rb", "generated/graal/#{relative}"],
+      "language_context" => "ruby",
+      "context_count" => 1,
+      "host_thread_pool_size" => MAX_GRAAL_THREADS,
+      "request_multiplexing" => true,
       "max_concurrency" => MAX_GRAAL_THREADS
     }
   end
@@ -368,9 +446,15 @@ when "graal"
     "rails_boot" => false,
     "rails_application_initialized" => false,
     "route_source" => "config/routes.rb:ripper-static",
+    "rails_route_authority" => "config/routes.rb",
+    "route_handler_authority" => "routes/**/handler.rb",
     "router_runtime" => "generated-rails-route-contract",
     "middleware_runtime" => "shared-ruby-no-rails-app",
     "engine_scope" => "process-shared",
+    "language_context" => "ruby",
+    "contexts_per_isolate" => 1,
+    "host_thread_pool_size_per_context" => MAX_GRAAL_THREADS,
+    "request_multiplexing" => true,
     "shared_source" => "generated/graal/common.rb",
     "source_memory" => "host-read-only-shareable",
     "context_lifetime" => "isolate",
