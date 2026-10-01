@@ -3,10 +3,7 @@ FROM oraclelinux:9-slim
 ARG TARGETARCH
 ARG TRUFFLERUBY_VERSION=34.0.1
 
-RUN microdnf install -y \
-      ca-certificates curl gzip tar xz \
-      gcc gcc-c++ make pkgconf-pkg-config \
-      zlib-devel libxml2-devel libxslt-devel openssl-devel libffi-devel \
+RUN microdnf install -y ca-certificates curl gzip tar xz zlib openssl-libs libffi \
     && microdnf clean all
 
 RUN set -eux; \
@@ -30,19 +27,19 @@ RUN set -eux; \
 ENV PATH=/opt/truffleruby/bin:${PATH} \
     BUNDLE_PATH=/opt/ores-ror-bundle \
     BUNDLE_GEMFILE=/var/task/Gemfile \
-    RAILS_ENV=production \
-    RACK_ENV=production \
-    RAILS_LOG_TO_STDOUT=1
+    BUNDLE_WITHOUT=rails \
+    ORES_RUNTIME_TARGET=aws-lambda
 
 WORKDIR /var/task
 
 COPY Gemfile ./Gemfile
 RUN truffleruby --version \
-    && bundle config set build.nokogiri --use-system-libraries \
+    && bundle config set without rails \
     && bundle install --jobs 4 --retry 3
 
 COPY . /var/task
-RUN mkdir -p /var/runtime \
+RUN truffleruby script/generate_faas_bundle.rb \
+    && mkdir -p /var/runtime \
     && cp /var/task/aws-lambda/bootstrap /var/runtime/bootstrap \
     && chmod 0755 /var/runtime/bootstrap
 

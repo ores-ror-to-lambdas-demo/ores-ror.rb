@@ -1,7 +1,6 @@
 #!/bin/sh
 set -eu
 cd "${LAMBDA_TASK_ROOT:-/var/task}"
-export RAILS_ENV="${RAILS_ENV:-production}"
-export RACK_ENV="${RACK_ENV:-$RAILS_ENV}"
-export RAILS_LOG_TO_STDOUT="${RAILS_LOG_TO_STDOUT:-1}"
-exec truffleruby aws-lambda/runtime.rb
+export ORES_RUNTIME_TARGET=aws-lambda
+export BUNDLE_WITHOUT=rails
+exec bundle exec truffleruby aws-lambda/runtime.rb

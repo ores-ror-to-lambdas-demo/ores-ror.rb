@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+
+TARGET="${ORES_BUILD_TARGET:-rails}"
+
+case "$TARGET" in
+  rails)
+    bundle config unset without >/dev/null 2>&1 || true
+    bundle install
+    ;;
+  graal|aws-lambda)
+    export BUNDLE_WITHOUT=rails
+    bundle config set without rails
+    bundle install
+    ruby script/generate_faas_bundle.rb
+    ;;
+  *)
+    echo "ORES_BUILD_TARGET must be rails, graal, or aws-lambda" >&2
+    exit 64
+    ;;
+esac

@@ -5,9 +5,12 @@ class HttpDatabase
   class Error < StandardError; end
 
   GRAAL_RUNTIME = defined?(ORES_GRAAL_RUNTIME) && ORES_GRAAL_RUNTIME
+  AWS_LAMBDA_RUNTIME = defined?(ORES_AWS_LAMBDA) && ORES_AWS_LAMBDA
 
   def self.runtime_name
-    GRAAL_RUNTIME ? "truffleruby-graal" : RUBY_ENGINE
+    return "truffleruby-graal" if GRAAL_RUNTIME
+    return "#{RUBY_ENGINE}-aws-lambda" if AWS_LAMBDA_RUNTIME
+    RUBY_ENGINE
   end
 
   class GraalTransport
@@ -97,7 +100,8 @@ class HttpDatabase
 
     BASE_URL = ENV.fetch("DATA_API_URL", "http://127.0.0.1:8787/v1")
     TOKEN = ENV.fetch("DATA_API_TOKEN", "")
-    POOL_SIZE = [Integer(ENV.fetch("DATA_API_HTTP_POOL_SIZE", "5")), 20].min
+    DEFAULT_POOL_SIZE = AWS_LAMBDA_RUNTIME ? 1 : 5
+    POOL_SIZE = [Integer(ENV.fetch("DATA_API_HTTP_POOL_SIZE", DEFAULT_POOL_SIZE.to_s)), 20].min
     POOL = ConnectionPool.new(size: POOL_SIZE, timeout: 2.0) do
       Session.new(base_url: BASE_URL, token: TOKEN)
     end
@@ -107,7 +111,10 @@ class HttpDatabase
     return GraalTransport.request(method, path, body: body, query: query) if GRAAL_RUNTIME
 
     POOL.with { |session| session.request(method, path, body: body, query: query) }
-  rescue ConnectionPool::TimeoutError
-    raise Error, "HTTP data connection pool exhausted"
+  rescue StandardError => error
+    if !GRAAL_RUNTIME && defined?(ConnectionPool::TimeoutError) && error.is_a?(ConnectionPool::TimeoutError)
+      raise Error, "HTTP data connection pool exhausted"
+    end
+    raise
   end
 end
