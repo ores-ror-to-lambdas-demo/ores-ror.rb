@@ -19,9 +19,10 @@ jobs:
           ruby-version: '3.4'
           bundler-cache: true
       - run: ORES_BUILD_TARGET=rails bundle exec rails test
-      - name: Boot normal Puma/Rails server
+      - name: Boot normal Puma/Rails server with bounded reusable workers
         run: |
-          ORES_BUILD_TARGET=rails RAILS_ENV=test bundle exec rails server -b 127.0.0.1 -p 3100 >rails-mri.log 2>&1 &
+          ORES_BUILD_TARGET=rails RAILS_ENV=test RAILS_MIN_THREADS=2 RAILS_MAX_THREADS=8 \
+            bundle exec rails server -b 127.0.0.1 -p 3100 >rails-mri.log 2>&1 &
           echo $! > rails.pid
           for n in $(seq 1 45); do
             if curl --fail --silent -H 'x-request-id: rails-mri-smoke' http://127.0.0.1:3100/healthz >health.json; then break; fi
@@ -46,10 +47,11 @@ jobs:
       - run: ORES_BUILD_TARGET=rails bundle exec rails test
       - name: Boot the same Rails application directly on TruffleRuby
         run: |
-          ORES_BUILD_TARGET=rails RAILS_ENV=test bundle exec rails server -b 127.0.0.1 -p 3101 >rails-truffle.log 2>&1 &
+          ORES_BUILD_TARGET=rails RAILS_ENV=test RAILS_MIN_THREADS=2 RAILS_MAX_THREADS=8 \
+            bundle exec rails server -b 127.0.0.1 -p 3101 >rails-truffle.log 2>&1 &
           echo $! > rails.pid
           for n in $(seq 1 60); do
-            if curl --fail --silent http://127.0.0.1:3101/healthz >health.json; then break; fi
+            if curl --fail --silent -H 'x-request-id: rails-truffle-smoke' http://127.0.0.1:3101/healthz >health.json; then break; fi
             sleep 1
           done
           cat health.json
@@ -58,6 +60,76 @@ jobs:
           kill $(cat rails.pid)
       - if: failure()
         run: cat rails-truffle.log || true
+
+  graal-codegen:
+    runs-on: ubuntu-latest
+    env:
+      BUNDLE_WITHOUT: rails:test
+      ORES_BUILD_TARGET: graal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: truffleruby+graalvm-34.0.1
+          bundler-cache: false
+      - name: Generate one immutable Ruby image for one long-lived Context
+        run: truffleruby bin/build-runtime
+      - name: Verify context and route topology contract
+        run: |
+          test -f generated/graal/handler.rb
+          test -f generated/graal/manifest.json
+          grep -Fq '"context_lifetime": "isolate"' generated/graal/manifest.json
+          grep -Fq '"context_model": "one-long-lived-context-per-isolate"' generated/graal/manifest.json
+          grep -Fq '"request_state": "explicit-per-invocation"' generated/graal/manifest.json
+          grep -Fq '"max_concurrency_per_isolate": 5' generated/graal/manifest.json
+          grep -Fq '"hard_cancel_scope": "isolate"' generated/graal/manifest.json
+          grep -Fq 'routes/users/[id]/handler.rb' generated/graal/manifest.json
+          ! grep -E 'config/environment|Rails\.application|require_relative' generated/graal/handler.rb
+          test -z "$(git status --porcelain --untracked-files=all -- generated/)"
+      - name: Reuse one TruffleRuby code image and physical thread without request-state leakage
+        run: |
+          cat >/tmp/graal-smoke.rb <<'RUBY'
+          require "json"
+
+          host_http = lambda do |payload|
+            request = JSON.parse(payload.to_s)
+            JSON.generate(
+              "ok" => true,
+              "status" => 200,
+              "body" => JSON.generate("ok" => true, "target" => request.fetch("path"))
+            )
+          end
+
+          factory = eval(File.read("generated/graal/handler.rb"), TOPLEVEL_BINDING, "generated/graal/handler.rb")
+          raise "Graal image must return a capability factory" unless factory.respond_to?(:call)
+          invoker = factory.call(host_http, "ci-context-1")
+          raise "Graal factory must return an invoker" unless invoker.respond_to?(:call)
+          raise "Rails unexpectedly loaded" if defined?(Rails)
+
+          1_000.times do |index|
+            request_id = "graal-codegen-#{index}"
+            response = JSON.parse(invoker.call(JSON.generate(
+              "request_id" => request_id,
+              "method" => "GET",
+              "path" => "/healthz",
+              "headers" => {}
+            )))
+            body = JSON.parse(response.fetch("body"))
+            raise "health failed" unless response.fetch("status") == 200
+            raise "request identity drift" unless body.fetch("request_id") == request_id
+            raise "invocation context leaked" unless Thread.current[:ores_invocation_context].nil?
+          end
+
+          user = JSON.parse(invoker.call(JSON.generate(
+            "request_id" => "graal-user",
+            "method" => "GET",
+            "path" => "/users/demo",
+            "headers" => {}
+          )))
+          raise "host HTTP bridge failed" unless user.fetch("body").include?("/users/demo")
+          puts user.fetch("body")
+          RUBY
+          truffleruby /tmp/graal-smoke.rb
 
   lambda-route-codegen:
     runs-on: ubuntu-latest
