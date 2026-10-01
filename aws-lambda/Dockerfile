@@ -6,7 +6,7 @@ ARG TRUFFLERUBY_VERSION=34.0.1
 RUN microdnf install -y \
       ca-certificates curl gzip tar xz \
       gcc gcc-c++ make pkgconf-pkg-config \
-      zlib-devel libxml2-devel libxslt-devel openssl-devel libyaml-devel libffi-devel \
+      zlib-devel libxml2-devel libxslt-devel openssl-devel libffi-devel \
     && microdnf clean all
 
 RUN set -eux; \
