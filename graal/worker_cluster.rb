@@ -24,7 +24,10 @@ module OresGraal
     end
 
     def call(raw_json)
-      payload = JSON.parse(raw_json.to_s)
+      # raw_json originates in an inner context and is therefore a foreign
+      # Ruby object here. Interpolation creates an outer-context String before
+      # the JSON C extension attempts to wrap it.
+      payload = JSON.parse("#{raw_json}")
       uri = @base.dup
       uri.path = [@base.path.sub(%r{/\z}, ""), payload.fetch("path")].join
       query = payload["query"] || {}
@@ -108,7 +111,11 @@ module OresGraal
 
           request, reply = job
           begin
-            raw = invoker.call(JSON.generate(request), @host_http_bridge).to_s
+            request_json = JSON.generate(request)
+            foreign_raw = invoker.call(request_json, @host_http_bridge)
+            # The inner context returns a foreign String proxy. Materialize it
+            # in the outer context before JSON.parse reaches the C extension.
+            raw = "#{foreign_raw}"
             reply << [:ok, JSON.parse(raw)]
           rescue StandardError => error
             reply << [:error, error]
@@ -153,7 +160,10 @@ module OresGraal
 
           def call_json(request_json, host_http_bridge)
             $ores_gs_http = host_http_bridge
-            request = JSON.parse(request_json)
+            # request_json belongs to the outer Ruby context. Interpolation
+            # creates a String owned by this worker context before JSON.parse.
+            request_text = "\#{request_json}"
+            request = JSON.parse(request_text)
             response = OresApp::Dispatcher.call(request, invoker: lambda do |route, normalized_request|
               unless route.name == EXPECTED_ROUTE
                 raise ArgumentError, "context \#{CONTEXT_ID} belongs to \#{EXPECTED_ROUTE.inspect}, got \#{route.name.inspect}"
