@@ -17,6 +17,28 @@ def generated_route_require_path(route)
   generated_route_relative_path(route).delete_suffix(".rb")
 end
 
+def route_manifest(routes)
+  routes.map do |route|
+    {
+      method: route.verb,
+      path: route.path,
+      handler: route.handler,
+      name: route.name,
+      middleware: route.middleware,
+      group: route.group,
+      pool: route.pool,
+      source_handler: OresApp::Routes.handler_relative_path(route)
+    }
+  end
+end
+
+def validate_source_handlers!(routes)
+  missing = routes.reject { |route| File.file?(OresApp::Routes.handler_path(route)) }
+  return if missing.empty?
+
+  abort "missing committed route handlers: #{missing.map { |route| OresApp::Routes.handler_relative_path(route) }.join(", ")}"
+end
+
 def write_route_handler(lambda_dir, route)
   handler_path = File.join(lambda_dir, "routes", generated_route_relative_path(route))
   FileUtils.mkdir_p(File.dirname(handler_path))
@@ -73,7 +95,7 @@ def write_group_handler(lambda_dir, group, routes)
   RUBY
 end
 
-def write_entrypoint(lambda_dir, granularity, routes)
+def write_lambda_entrypoint(lambda_dir, granularity, routes)
   if granularity == "route"
     requires = routes.map { |route| %(require_relative "routes/#{generated_route_require_path(route)}") }.join("\n")
     cases = routes.map do |route|
@@ -129,45 +151,116 @@ def write_entrypoint(lambda_dir, granularity, routes)
   RUBY
 end
 
+def flatten_ruby_source(path)
+  File.readlines(path).reject { |line| line.match?(/^\s*require_relative\b/) }.join
+end
+
+def write_graal_bundle(root, graal_dir, routes)
+  FileUtils.rm_rf(graal_dir)
+  FileUtils.mkdir_p(graal_dir)
+
+  source = String.new(<<~RUBY)
+    # frozen_string_literal: true
+    # GENERATED FILE. DO NOT EDIT OR COMMIT.
+    # One immutable Ruby code image, evaluated once per long-lived Graal Context.
+
+    ORES_GRAAL_RUNTIME = true unless defined?(ORES_GRAAL_RUNTIME)
+    ORES_EXECUTION_MODE = "graal" unless defined?(ORES_EXECUTION_MODE)
+  RUBY
+
+  %w[
+    lib/ores_app/routes.rb
+    lib/ores_app/middleware.rb
+    lib/ores_app/http_database.rb
+    lib/ores_app/handlers.rb
+    lib/ores_app/dispatcher.rb
+  ].each do |relative|
+    source << "\n# --- #{relative} ---\n"
+    source << flatten_ruby_source(File.join(root, relative))
+    source << "\n"
+  end
+
+  routes.each do |route|
+    relative = OresApp::Routes.handler_relative_path(route)
+    source << "\n# --- #{relative} ---\n"
+    source << flatten_ruby_source(File.join(root, relative))
+    source << "\n"
+  end
+
+  cases = routes.map do |route|
+    %(when #{route.name.inspect} then OresApp::RouteHandlers::#{ruby_const(route.name)}.call(request))
+  end.join("\n          ")
+
+  source << <<~RUBY
+
+    # --- generated Graal route resolver ---
+    module OresGenerated
+      module GraalEntrypoint
+        module_function
+
+        def invoke(route, request)
+          case route.name
+          #{cases}
+          else
+            raise ArgumentError, "no Graal route handler for \#{route.name.inspect}"
+          end
+        end
+      end
+    end
+  RUBY
+
+  source << "\n# --- graal/bootstrap.rb ---\n"
+  source << flatten_ruby_source(File.join(root, "graal/bootstrap.rb"))
+  source << "\n"
+
+  File.write(File.join(graal_dir, "handler.rb"), source)
+
+  manifest = {
+    "schema" => "ores-graal-ruby-manifest/v2",
+    "application" => "ores-ror.rb",
+    "entrypoint" => "generated/graal/handler.rb",
+    "runtime" => "truffleruby",
+    "rails_boot" => false,
+    "single_source" => true,
+    "context_lifetime" => "isolate",
+    "context_model" => "one-long-lived-context-per-isolate",
+    "request_state" => "explicit-per-invocation",
+    "thread_identity_is_request_identity" => false,
+    "max_concurrency_per_isolate" => 5,
+    "max_isolate_age_seconds" => 1800,
+    "idle_retire_seconds" => 300,
+    "hard_cancel_scope" => "isolate",
+    "replacement_before_drain" => true,
+    "guest_filesystem" => false,
+    "guest_created_threads" => false,
+    "database_transport" => "host-http",
+    "routes" => route_manifest(routes)
+  }
+  File.write(File.join(graal_dir, "manifest.json"), JSON.pretty_generate(manifest) + "\n")
+end
+
 target = ENV.fetch("ORES_BUILD_TARGET", "rails").downcase
+root = File.expand_path("..", __dir__)
 output_root = File.expand_path(ENV.fetch("ORES_BUILD_OUTPUT", "../generated"), __dir__)
 lambda_dir = File.join(output_root, "lambda")
+graal_dir = File.join(output_root, "graal")
+routes = OresApp::Routes::TABLE
 
 case target
 when "rails"
   FileUtils.rm_rf(lambda_dir)
-  warn "build target=rails: no lambda runtime generated; boot Rails normally"
+  FileUtils.rm_rf(graal_dir)
+  warn "build target=rails: no FaaS runtime generated; boot Rails normally"
 when "lambda"
   granularity = ENV.fetch("ORES_LAMBDA_HANDLER_GRANULARITY", "route").downcase
   abort "ORES_LAMBDA_HANDLER_GRANULARITY must be route or group" unless %w[route group].include?(granularity)
 
+  validate_source_handlers!(routes)
   FileUtils.rm_rf(lambda_dir)
   FileUtils.mkdir_p(lambda_dir)
-  routes = OresApp::Routes::TABLE
-
-  missing_handlers = routes.reject { |route| File.file?(OresApp::Routes.handler_path(route)) }
-  unless missing_handlers.empty?
-    abort "missing committed route handlers: #{missing_handlers.map { |route| OresApp::Routes.handler_relative_path(route) }.join(", ")}"
-  end
-
   routes.each { |route| write_route_handler(lambda_dir, route) }
   routes.group_by(&:group).each { |group, grouped_routes| write_group_handler(lambda_dir, group, grouped_routes) }
-  write_entrypoint(lambda_dir, granularity, routes)
-
-  route_manifest = routes.map do |route|
-    {
-      method: route.verb,
-      path: route.path,
-      handler: route.handler,
-      name: route.name,
-      middleware: route.middleware,
-      group: route.group,
-      pool: route.pool,
-      source_handler: OresApp::Routes.handler_relative_path(route),
-      route_handler: "generated/lambda/routes/#{generated_route_relative_path(route)}",
-      group_handler: "generated/lambda/groups/#{route.group}/handler.rb"
-    }
-  end
+  write_lambda_entrypoint(lambda_dir, granularity, routes)
 
   manifest = {
     "schema" => "ores-lambda-manifest/v2",
@@ -176,11 +269,19 @@ when "lambda"
     "runtime" => "ruby",
     "rails_boot" => false,
     "handler_granularity" => granularity,
-    "routes" => route_manifest
+    "routes" => route_manifest(routes).map do |entry|
+      entry.merge(
+        route_handler: "generated/lambda/routes/#{generated_route_relative_path(routes.find { |route| route.name == entry.fetch(:name) })}",
+        group_handler: "generated/lambda/groups/#{entry.fetch(:group)}/handler.rb"
+      )
+    end
   }
-
   File.write(File.join(lambda_dir, "manifest.json"), JSON.pretty_generate(manifest) + "\n")
   warn "build target=lambda: generated URL-shaped route handlers in #{lambda_dir}; active granularity=#{granularity}; Rails not booted"
+when "graal"
+  validate_source_handlers!(routes)
+  write_graal_bundle(root, graal_dir, routes)
+  warn "build target=graal: generated one long-lived-context source image in #{graal_dir}; Rails not booted"
 else
-  abort "unsupported ORES_BUILD_TARGET=#{target.inspect}; expected rails or lambda"
+  abort "unsupported ORES_BUILD_TARGET=#{target.inspect}; expected rails, lambda, or graal"
 end
