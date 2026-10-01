@@ -1,7 +1,11 @@
+# frozen_string_literal: true
+
 require "base64"
 require "uri"
-require_relative "../config/environment"
-require_relative "../lib/ores_runtime/rack_dispatch"
+
+entrypoint = File.expand_path("../generated/lambda/entrypoint.rb", __dir__)
+raise "lambda runtime not generated; run ORES_BUILD_TARGET=lambda ruby bin/build-runtime" unless File.file?(entrypoint)
+require entrypoint
 
 module OresRuntime
   module AwsLambda
@@ -9,18 +13,18 @@ module OresRuntime
 
     def handle(event, request_id: nil)
       request = event_to_request(event, request_id: request_id)
-      rack = RackDispatch.call(Rails.application, request)
-      content_type = rack.fetch("headers", {}).fetch("content-type", "application/octet-stream")
-      body = rack.fetch("body", "")
-      textual = RackDispatch.textual_media_type?(content_type)
+      result = OresGenerated::LambdaEntrypoint.call(request)
+      content_type = result.fetch("headers", {}).fetch("content-type", "application/octet-stream")
+      body = result.fetch("body", "")
+      textual = textual_media_type?(content_type)
 
-      response_headers = rack.fetch("headers").dup
+      response_headers = result.fetch("headers", {}).dup
       response_headers.delete("content-length")
       response_headers.delete("transfer-encoding")
       response_headers.delete("connection")
 
       {
-        "statusCode" => rack.fetch("status"),
+        "statusCode" => result.fetch("status"),
         "headers" => response_headers,
         "body" => textual ? body : Base64.strict_encode64(body),
         "isBase64Encoded" => !textual
@@ -37,7 +41,6 @@ module OresRuntime
     end
 
     def from_v2(event, request_id:)
-      body = decode_body(event)
       headers = event.fetch("headers", {}).dup
       cookies = Array(event["cookies"])
       headers["cookie"] = cookies.join("; ") unless cookies.empty?
@@ -47,7 +50,8 @@ module OresRuntime
         "path" => event["rawPath"] || event.dig("requestContext", "http", "path") || "/",
         "query_string" => event.fetch("rawQueryString", ""),
         "headers" => headers,
-        "body" => body
+        "content_type" => headers["content-type"] || headers["Content-Type"],
+        "body" => decode_body(event)
       }
     end
 
@@ -59,12 +63,14 @@ module OresRuntime
           pairs << "#{URI.encode_www_form_component(key.to_s)}=#{URI.encode_www_form_component(entry.to_s)}"
         end
       end
+      headers = event.fetch("headers", {})
       {
         "request_id" => request_id || event.dig("requestContext", "requestId") || "aws-lambda",
         "method" => event.fetch("httpMethod", "GET"),
         "path" => event["path"] || "/",
         "query_string" => pairs.join("&"),
-        "headers" => event.fetch("headers", {}),
+        "headers" => headers,
+        "content_type" => headers["content-type"] || headers["Content-Type"],
         "body" => decode_body(event)
       }
     end
@@ -73,5 +79,11 @@ module OresRuntime
       raw = event["body"].to_s
       event["isBase64Encoded"] ? Base64.decode64(raw) : raw
     end
+
+    def textual_media_type?(content_type)
+      value = content_type.to_s.downcase
+      value.start_with?("text/") || value.include?("json") || value.include?("xml") || value.include?("javascript")
+    end
+    private_class_method :from_v2, :from_v1, :decode_body, :textual_media_type?
   end
 end
