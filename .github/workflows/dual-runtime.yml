@@ -71,13 +71,8 @@ jobs:
         with:
           ruby-version: '3.4'
           bundler-cache: true
-      - name: Verify committed filesystem route tree
-        run: |
-          test -f 'routes/users/[id]/handler.rb'
-          test -f 'routes/orders/[id]/handler.rb'
-          test -f 'routes/orders/[id]/cancel/handler.rb'
-          test -f 'routes/profiles/[id]/preferences/handler.rb'
-          test "$(find routes -name handler.rb | wc -l)" -eq 13
+      - name: Verify exact Rails/filesystem route contract
+        run: ruby bin/verify-routes
       - run: ruby bin/build-runtime
       - name: Verify URL-shaped generated route and grouped handler artifacts
         run: |
@@ -105,6 +100,7 @@ jobs:
         with:
           ruby-version: '3.4'
           bundler-cache: true
+      - run: ruby bin/verify-routes
       - run: ruby bin/build-runtime
       - name: Verify grouped dispatch build
         run: |
