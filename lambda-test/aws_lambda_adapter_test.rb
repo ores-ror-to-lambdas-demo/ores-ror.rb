@@ -2,7 +2,7 @@
 
 require "json"
 require "minitest/autorun"
-require_relative "../aws-lambda/handler"
+require_relative "../aws-lambda/adapter"
 
 class AwsLambdaAdapterTest < Minitest::Test
   def test_http_api_v2_event_reaches_generated_route_handler_without_rails
