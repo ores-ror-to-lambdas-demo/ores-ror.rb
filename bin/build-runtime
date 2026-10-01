@@ -1,0 +1,52 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "fileutils"
+require "json"
+require_relative "../lib/ores_app/routes"
+
+target = ENV.fetch("ORES_BUILD_TARGET", "rails").downcase
+output_root = File.expand_path(ENV.fetch("ORES_BUILD_OUTPUT", "../generated"), __dir__)
+lambda_dir = File.join(output_root, "lambda")
+
+case target
+when "rails"
+  FileUtils.rm_rf(lambda_dir)
+  warn "build target=rails: no lambda runtime generated; boot Rails normally"
+when "lambda"
+  FileUtils.mkdir_p(lambda_dir)
+
+  manifest = {
+    "schema" => "ores-lambda-manifest/v1",
+    "application" => "ores-ror.rb",
+    "entrypoint" => "generated/lambda/entrypoint.rb",
+    "runtime" => "ruby",
+    "rails_boot" => false,
+    "routes" => OresApp::Routes.manifest
+  }
+
+  File.write(File.join(lambda_dir, "manifest.json"), JSON.pretty_generate(manifest) + "\n")
+  File.write(File.join(lambda_dir, "entrypoint.rb"), <<~'RUBY')
+    # frozen_string_literal: true
+    # GENERATED FILE. DO NOT EDIT OR COMMIT.
+
+    app_root = File.expand_path("../..", __dir__)
+    $LOAD_PATH.unshift(File.join(app_root, "lib")) unless $LOAD_PATH.include?(File.join(app_root, "lib"))
+
+    require "ores_app/dispatcher"
+
+    module OresGenerated
+      module LambdaEntrypoint
+        module_function
+
+        def call(request)
+          OresApp::Dispatcher.call(request)
+        end
+      end
+    end
+  RUBY
+
+  warn "build target=lambda: generated #{lambda_dir} without booting Rails"
+else
+  abort "unsupported ORES_BUILD_TARGET=#{target.inspect}; expected rails or lambda"
+end
