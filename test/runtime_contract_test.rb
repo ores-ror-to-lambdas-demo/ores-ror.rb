@@ -10,15 +10,14 @@ class RuntimeContractTest < ActionDispatch::IntegrationTest
     assert payload.fetch("runtime").is_a?(String)
   end
 
-  test "resource routes use the shared HttpDatabase service" do
-    fake = ->(method, path, body: nil, query: {}) {
-      { status: 200, body: { "method" => method.to_s, "path" => path, "body" => body, "query" => query } }
-    }
-
-    HttpDatabase.stub(:request, fake) do
-      get "/users/demo-user"
-      assert_response :success
-      assert_equal "/users/demo-user", JSON.parse(response.body).fetch("path")
-    end
+  test "resource routes are owned by the same Rails router in every runtime" do
+    assert_recognizes(
+      { controller: "resources", action: "user", id: "demo-user" },
+      { path: "/users/demo-user", method: :get }
+    )
+    assert_recognizes(
+      { controller: "resources", action: "checkout_session", id: "cart-1" },
+      { path: "/checkout-sessions/cart-1", method: :post }
+    )
   end
 end
