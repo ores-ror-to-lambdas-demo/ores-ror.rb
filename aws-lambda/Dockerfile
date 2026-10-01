@@ -39,7 +39,8 @@ ENV BUNDLE_PATH=/opt/ores-ror-bundle \
 
 COPY Gemfile ./Gemfile
 RUN bundle install --jobs 4 --retry 3 \
-    && truffleruby -e 'abort "rails gem present" unless Gem::Specification.find_all_by_name("rails").empty?'
+    && truffleruby -e 'abort "rails gem present" unless Gem::Specification.find_all_by_name("rails").empty?' \
+    && bundle exec truffleruby -e 'require "connection_pool"; require "base64"'
 
 COPY . /var/task
 
