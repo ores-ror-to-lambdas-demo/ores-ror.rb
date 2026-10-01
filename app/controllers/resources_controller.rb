@@ -5,7 +5,7 @@ require_relative "../../lib/ores_app/dispatcher"
 class ResourcesController < ApplicationController
   def dispatch
     result = OresApp::Dispatcher.call(
-      "request_id" => request.request_id,
+      "request_id" => request.headers["x-request-id"].presence || request.request_id,
       "method" => request.request_method,
       "path" => request.path,
       "query" => request.query_parameters,
