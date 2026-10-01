@@ -1,0 +1,34 @@
+schema_version: ores.compose.v1
+project: ores-ror-dual-runtime
+allow_lazy_start: false
+services:
+  rails:
+    runtime: host
+    command: ["bundle", "exec", "rails", "server", "-b", "127.0.0.1", "-p", "3100"]
+    environment:
+      BUNDLE_PATH: "vendor/bundle-mri"
+      ORES_BUILD_TARGET: "rails"
+      RAILS_ENV: "test"
+    healthcheck:
+      command: ["ruby", "bin/http-healthcheck", "127.0.0.1", "3100", "/healthz"]
+      interval_ms: 500
+      timeout_ms: 2000
+      retries: 20
+
+  graal:
+    runtime: host
+    build:
+      - ["truffleruby", "-S", "bundle", "exec", "truffleruby", "bin/build-runtime"]
+    command: ["truffleruby", "-S", "bundle", "exec", "truffleruby", "--jvm", "graal/server.rb"]
+    environment:
+      BUNDLE_PATH: "vendor/bundle-truffleruby"
+      ORES_BUILD_TARGET: "lambda"
+      ORES_LAMBDA_HANDLER_GRANULARITY: "route"
+      ORES_GRAAL_HOST: "127.0.0.1"
+      ORES_GRAAL_PORT: "3200"
+      ORES_GRAAL_CONTEXTS_PER_HANDLER: "2"
+    healthcheck:
+      command: ["truffleruby", "bin/http-healthcheck", "127.0.0.1", "3200", "/__ores/cluster"]
+      interval_ms: 500
+      timeout_ms: 2000
+      retries: 40
