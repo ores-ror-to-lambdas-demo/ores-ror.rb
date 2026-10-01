@@ -5,10 +5,16 @@ require "digest"
 require "fileutils"
 require "json"
 require "pathname"
+require "ripper"
 
 ROOT = File.expand_path("..", __dir__)
 OUTPUT_ROOT = File.expand_path(ENV.fetch("ORES_BUILD_OUTPUT", "../generated"), __dir__)
 LAMBDA_DIR = File.join(OUTPUT_ROOT, "lambda")
+ROUTES_FILE = File.join(ROOT, "config", "routes.rb")
+HTTP_VERBS = %w[get post put patch delete options head].freeze
+UNSUPPORTED_ROUTE_DSL = %w[
+  resources resource namespace scope match root mount concern concerns direct resolve
+].freeze
 
 def ruby_const(value)
   value.to_s.split(/[^A-Za-z0-9]+/).reject(&:empty?).map { |part| part[0].upcase + part[1..].to_s }.join
@@ -44,20 +50,196 @@ def nested_module_source(constant_name, body)
   source
 end
 
-def route_path(route)
-  route.path.spec.to_s.sub("(.:format)", "")
+def walk_sexp(node, &block)
+  return unless node.is_a?(Array)
+
+  yield node
+  node.each { |child| walk_sexp(child, &block) if child.is_a?(Array) }
 end
 
-def route_verb(route)
-  route.verb.to_s.gsub(/[\^$]/, "")
+def call_name_and_args(node)
+  case node[0]
+  when :command
+    ident = node[1]
+    return unless ident&.[](0) == :@ident
+
+    [ident[1], node[2], ident[2]&.first]
+  when :method_add_arg
+    callee = node[1]
+    return unless callee&.[](0) == :fcall
+    ident = callee[1]
+    return unless ident&.[](0) == :@ident
+
+    args = node[2]
+    args = args[1] if args&.[](0) == :arg_paren
+    [ident[1], args, ident[2]&.first]
+  end
 end
 
-def route_identifier(route, verb:, path:, controller:, action:)
-  explicit = route.name&.to_s
-  return explicit unless explicit.nil? || explicit.empty?
+def argument_nodes(args_node)
+  return [] unless args_node.is_a?(Array)
+  return args_node[1] || [] if args_node[0] == :args_add_block
+
+  []
+end
+
+def static_string(node)
+  return unless node.is_a?(Array) && node[0] == :string_literal
+
+  content = node[1]
+  return "" if content == [:string_content]
+  return unless content.is_a?(Array) && content[0] == :string_content
+
+  pieces = content.drop(1)
+  return unless pieces.all? { |piece| piece.is_a?(Array) && piece[0] == :@tstring_content }
+
+  pieces.map { |piece| piece[1] }.join
+end
+
+def static_symbol(node)
+  return unless node.is_a?(Array) && node[0] == :symbol_literal
+
+  symbol = node.dig(1, 1)
+  return unless symbol.is_a?(Array) && %i[@ident @op @const].include?(symbol[0])
+
+  symbol[1]
+end
+
+def static_literal(node)
+  static_string(node) || static_symbol(node)
+end
+
+def keyword_pairs(node)
+  return {} unless node.is_a?(Array)
+
+  pairs =
+    case node[0]
+    when :bare_assoc_hash
+      node[1] || []
+    when :hash
+      assoc = node[1]
+      assoc&.[](0) == :assoclist_from_args ? (assoc[1] || []) : []
+    else
+      []
+    end
+
+  pairs.each_with_object({}) do |pair, out|
+    next unless pair.is_a?(Array) && pair[0] == :assoc_new
+
+    key_node, value_node = pair[1], pair[2]
+    next unless key_node.is_a?(Array) && key_node[0] == :@label
+
+    out[key_node[1].delete_suffix(":")] = static_literal(value_node)
+  end
+end
+
+def source_defines_action?(source_file, action)
+  sexp = Ripper.sexp(File.read(source_file))
+  return false unless sexp
+
+  found = false
+  walk_sexp(sexp) do |node|
+    next unless node[0] == :def
+
+    ident = node[1]
+    if ident.is_a?(Array) && ident[0] == :@ident && ident[1] == action
+      found = true
+      break
+    end
+  end
+  found
+end
+
+def route_identifier(explicit_name, verb:, path:, controller:, action:)
+  return explicit_name unless explicit_name.nil? || explicit_name.empty?
 
   digest = Digest::SHA256.hexdigest("#{verb} #{path} #{controller}##{action}")[0, 12]
   "rails_#{digest}"
+end
+
+def parse_static_routes
+  source = File.read(ROUTES_FILE)
+  sexp = Ripper.sexp(source)
+  abort "cannot parse #{ROUTES_FILE}" unless sexp
+
+  routes = []
+  unsupported = []
+
+  walk_sexp(sexp) do |node|
+    call = call_name_and_args(node)
+    next unless call
+
+    method_name, args_node, line = call
+    if UNSUPPORTED_ROUTE_DSL.include?(method_name)
+      unsupported << "#{method_name} at line #{line || "?"}"
+      next
+    end
+    next unless HTTP_VERBS.include?(method_name)
+
+    args = argument_nodes(args_node)
+    path = static_string(args[0])
+    options = args.filter_map { |arg| keyword_pairs(arg) }.reduce({}, :merge)
+
+    target = options["to"]
+    controller = options["controller"]
+    action = options["action"]
+
+    if target
+      unless target.include?("#")
+        abort "static route parser requires controller#action in to: for #{method_name.upcase} at line #{line || "?"}"
+      end
+      controller, action = target.split("#", 2)
+    end
+
+    unless path && controller && action
+      abort "static route parser could not resolve #{method_name.upcase} route at line #{line || "?"}; use literal path and to: \"controller#action\""
+    end
+
+    controller_file = File.join(ROOT, "app", "controllers", "#{controller}_controller.rb")
+    unless File.file?(controller_file)
+      abort "Rails convention expected controller file #{Pathname.new(controller_file).relative_path_from(Pathname.new(ROOT))}"
+    end
+    unless source_defines_action?(controller_file, action)
+      abort "Rails convention expected #{controller_class_name(controller)}##{action} in #{Pathname.new(controller_file).relative_path_from(Pathname.new(ROOT))}"
+    end
+
+    endpoint_dir = File.dirname(controller_file)
+    handler_file = File.join(endpoint_dir, "handler.rb")
+    handler_rel = Pathname.new(handler_file).relative_path_from(Pathname.new(ROOT)).to_s
+    controller_rel = Pathname.new(controller_file).relative_path_from(Pathname.new(ROOT)).to_s
+    view_logical_path = "#{controller}/#{action}"
+    view_glob = File.join(ROOT, "app", "views", controller, "#{action}.*")
+    view_files = Dir.glob(view_glob).sort.map do |file|
+      Pathname.new(file).relative_path_from(Pathname.new(ROOT)).to_s
+    end
+    group = controller.split("/").first
+    name = route_identifier(options["as"], verb: method_name.upcase, path: path, controller: controller, action: action)
+
+    routes << {
+      verb: method_name.upcase,
+      path: path,
+      name: name,
+      controller: controller,
+      controller_class: controller_class_name(controller),
+      action: action,
+      controller_file: controller_rel,
+      endpoint_dir: Pathname.new(endpoint_dir).relative_path_from(Pathname.new(ROOT)).to_s,
+      handler_file: handler_file,
+      handler_path: handler_rel,
+      handler_constant: handler_constant_name(endpoint_dir),
+      view_logical_path: view_logical_path,
+      view_files: view_files,
+      middleware: %w[request_id],
+      group: group,
+      pool: group
+    }
+  end
+
+  unless unsupported.empty?
+    abort "Lambda/Graal static codegen does not execute Rails routing DSL. Unsupported routing constructs: #{unsupported.uniq.join(", ")}"
+  end
+
+  routes
 end
 
 def clean_generated_handlers!
@@ -84,74 +266,13 @@ def validate_handler_collisions!(routes)
   abort "endpoint-per-folder convention violated; multiple Rails endpoints map to one generated handler.rb: #{detail}"
 end
 
-def discover_rails_routes
-  require File.join(ROOT, "config", "environment")
-  Rails.application.eager_load!
-
-  Rails.application.routes.routes.filter_map do |route|
-    defaults = route.defaults
-    controller = defaults[:controller].to_s
-    action = defaults[:action].to_s
-    verb = route_verb(route)
-    path = route_path(route)
-
-    next if controller.empty? || action.empty?
-    next if verb.empty? || verb.include?("|")
-
-    begin
-      klass = controller_class_name(controller).constantize
-      method = klass.instance_method(action)
-    rescue NameError
-      next
-    end
-
-    source_file = method.source_location&.first
-    next unless source_file
-
-    source_file = File.expand_path(source_file)
-    controllers_root = File.join(ROOT, "app", "controllers") + File::SEPARATOR
-    next unless source_file.start_with?(controllers_root)
-
-    name = route_identifier(route, verb: verb, path: path, controller: controller, action: action)
-
-    endpoint_dir = File.dirname(source_file)
-    handler_file = File.join(endpoint_dir, "handler.rb")
-    handler_rel = Pathname.new(handler_file).relative_path_from(Pathname.new(ROOT)).to_s
-    controller_rel = Pathname.new(source_file).relative_path_from(Pathname.new(ROOT)).to_s
-    view_logical_path = "#{controller}/#{action}"
-    view_glob = File.join(ROOT, "app", "views", controller, "#{action}.*")
-    view_files = Dir.glob(view_glob).sort.map do |file|
-      Pathname.new(file).relative_path_from(Pathname.new(ROOT)).to_s
-    end
-    group = controller.split("/").first
-
-    {
-      verb: verb,
-      path: path,
-      name: name,
-      controller: controller,
-      controller_class: klass.name,
-      action: action,
-      controller_file: controller_rel,
-      endpoint_dir: Pathname.new(endpoint_dir).relative_path_from(Pathname.new(ROOT)).to_s,
-      handler_file: handler_file,
-      handler_path: handler_rel,
-      handler_constant: handler_constant_name(endpoint_dir),
-      view_logical_path: view_logical_path,
-      view_files: view_files,
-      middleware: %w[request_id],
-      group: group,
-      pool: group
-    }
-  end
-end
-
 def write_colocated_handler(route)
   FileUtils.mkdir_p(File.dirname(route.fetch(:handler_file)))
 
   body = <<~RUBY
     CONTROLLER_PATH = #{route.fetch(:controller).inspect}.freeze
     CONTROLLER_CLASS = #{route.fetch(:controller_class).inspect}.freeze
+    CONTROLLER_FILE = #{route.fetch(:controller_file).inspect}.freeze
     ACTION = #{route.fetch(:action).inspect}.freeze
     VIEW_LOGICAL_PATH = #{route.fetch(:view_logical_path).inspect}.freeze
     VIEW_FILES = #{route.fetch(:view_files).inspect}.freeze
@@ -160,13 +281,6 @@ def write_colocated_handler(route)
 
     def call(request)
       OresApp::Handlers.call(CONTROLLER_PATH, ACTION, request)
-    end
-
-    def rails_rack(env)
-      raise "Rails is not loaded in this runtime" unless defined?(Rails)
-
-      controller = CONTROLLER_CLASS.split("::").inject(Object) { |scope, name| scope.const_get(name) }
-      controller.action(ACTION).call(env)
     end
 
     def view_logical_path
@@ -182,6 +296,7 @@ def write_colocated_handler(route)
     # frozen_string_literal: true
     # GENERATED FILE. DO NOT EDIT OR COMMIT.
     #
+    # Derived statically from Rails conventions; Rails is never loaded here.
     # Rails source: #{route.fetch(:controller_file)}
     # Rails endpoint: #{route.fetch(:controller)}##{route.fetch(:action)}
     # Rails view lookup: #{route.fetch(:view_logical_path)}
@@ -309,14 +424,16 @@ target = ENV.fetch("ORES_BUILD_TARGET", "rails").downcase
 case target
 when "rails"
   FileUtils.rm_rf(LAMBDA_DIR)
-  warn "build target=rails: boot Rails normally; no FaaS files generated"
+  warn "build target=rails: no FaaS generation; Rails boots only through the normal Rails server/application path"
 when "lambda"
+  abort "Rails must not be loaded during Lambda/Graal generation" if defined?(Rails)
+
   granularity = ENV.fetch("ORES_LAMBDA_HANDLER_GRANULARITY", "route").downcase
   abort "ORES_LAMBDA_HANDLER_GRANULARITY must be route or group" unless %w[route group].include?(granularity)
 
   clean_generated_handlers!
-  routes = discover_rails_routes
-  abort "no application Rails controller routes discovered" if routes.empty?
+  routes = parse_static_routes
+  abort "no statically resolvable application routes found in config/routes.rb" if routes.empty?
   validate_handler_collisions!(routes)
 
   routes.each { |route| write_colocated_handler(route) }
@@ -328,12 +445,13 @@ when "lambda"
   write_entrypoint(routes, granularity)
 
   manifest = {
-    "schema" => "ores-lambda-manifest/v4",
+    "schema" => "ores-lambda-manifest/v5",
     "application" => "ores-ror.rb",
     "entrypoint" => "generated/lambda/entrypoint.rb",
     "runtime" => "ruby",
     "rails_boot" => false,
-    "route_source" => "Rails.application.routes",
+    "route_source" => "config/routes.rb:static-ripper",
+    "view_root" => "app/views",
     "handler_granularity" => granularity,
     "routes" => routes.map do |route|
       route.reject { |key, _| key == :handler_file }.merge(
@@ -343,7 +461,7 @@ when "lambda"
   }
 
   File.write(File.join(LAMBDA_DIR, "manifest.json"), JSON.pretty_generate(manifest) + "\n")
-  warn "build target=lambda: derived #{routes.length} endpoints from Rails routes; generated Zeitwerk-compatible co-located handlers; granularity=#{granularity}"
+  warn "build target=lambda: statically derived #{routes.length} endpoints without Rails; generated co-located handlers; granularity=#{granularity}"
 else
   abort "unsupported ORES_BUILD_TARGET=#{target.inspect}; expected rails or lambda"
 end
