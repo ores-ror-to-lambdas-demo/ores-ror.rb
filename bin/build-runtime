@@ -10,30 +10,50 @@ def ruby_const(value)
 end
 
 def generated_route_relative_path(route)
-  OresApp::Routes.handler_relative_path(route).delete_prefix("routes/")
+  OresApp::Routes.lambda_route_relative_path(route)
 end
 
 def generated_route_require_path(route)
   generated_route_relative_path(route).delete_suffix(".rb")
 end
 
+def verify_source_contract!(route)
+  controller = OresApp::Routes.controller_source_path(route)
+  view = OresApp::Routes.view_source_path(route)
+  abort "missing Rails controller source: #{controller}" unless File.file?(controller)
+  abort "missing Rails view source: #{view}" unless File.file?(view)
+end
+
 def write_route_handler(lambda_dir, route)
+  verify_source_contract!(route)
   handler_path = File.join(lambda_dir, "routes", generated_route_relative_path(route))
   FileUtils.mkdir_p(File.dirname(handler_path))
   const_name = ruby_const(route.name)
+  template = File.read(OresApp::Routes.view_source_path(route))
+
   File.write(handler_path, <<~RUBY)
     # frozen_string_literal: true
     # GENERATED FILE. DO NOT EDIT OR COMMIT.
+    # Source mapping: #{OresApp::Routes.rails_controller_class_name(route)}##{route.action} -> app/views/#{route.view}.json.erb
 
-    require "ores_app/route_handlers"
+    require "ores_app/controllers"
+    require "ores_app/lambda_view"
 
     module OresGenerated
       module Routes
         module #{const_name}
+          RAILS_CONTROLLER = #{OresApp::Routes.rails_controller_class_name(route).inspect}.freeze
+          CONTROLLER_PATH = #{route.controller.inspect}.freeze
+          CONTROLLER = #{OresApp::Routes.plain_controller_class_name(route)}
+          ACTION = #{route.action.to_sym.inspect}
+          VIEW = #{route.view.inspect}.freeze
+          TEMPLATE = #{template.dump}.freeze
+
           module_function
 
           def call(request)
-            OresApp::RouteHandlers.call(#{route.name.inspect}, request)
+            result = CONTROLLER.call(ACTION, request)
+            OresApp::LambdaView.render(VIEW, TEMPLATE, result)
           end
         end
       end
@@ -145,11 +165,6 @@ when "lambda"
   FileUtils.mkdir_p(lambda_dir)
   routes = OresApp::Routes::TABLE
 
-  missing_handlers = routes.reject { |route| File.file?(OresApp::Routes.handler_path(route)) }
-  unless missing_handlers.empty?
-    abort "missing committed route handlers: #{missing_handlers.map { |route| OresApp::Routes.handler_relative_path(route) }.join(", ")}"
-  end
-
   routes.each { |route| write_route_handler(lambda_dir, route) }
   routes.group_by(&:group).each { |group, grouped_routes| write_group_handler(lambda_dir, group, grouped_routes) }
   write_entrypoint(lambda_dir, granularity, routes)
@@ -163,24 +178,31 @@ when "lambda"
       middleware: route.middleware,
       group: route.group,
       pool: route.pool,
-      source_handler: OresApp::Routes.handler_relative_path(route),
+      rails_controller: OresApp::Routes.rails_controller_class_name(route),
+      controller: route.controller,
+      plain_controller: OresApp::Routes.plain_controller_class_name(route),
+      action: route.action,
+      view: route.view,
+      controller_source: "app/controllers/#{route.controller}_controller.rb",
+      view_source: "app/views/#{route.view}.json.erb",
       route_handler: "generated/lambda/routes/#{generated_route_relative_path(route)}",
       group_handler: "generated/lambda/groups/#{route.group}/handler.rb"
     }
   end
 
   manifest = {
-    "schema" => "ores-lambda-manifest/v2",
+    "schema" => "ores-lambda-manifest/v3",
     "application" => "ores-ror.rb",
     "entrypoint" => "generated/lambda/entrypoint.rb",
     "runtime" => "ruby",
     "rails_boot" => false,
+    "dispatch" => "generated-plain-ruby-controller-view",
     "handler_granularity" => granularity,
     "routes" => route_manifest
   }
 
   File.write(File.join(lambda_dir, "manifest.json"), JSON.pretty_generate(manifest) + "\n")
-  warn "build target=lambda: generated URL-shaped route handlers in #{lambda_dir}; active granularity=#{granularity}; Rails not booted"
+  warn "build target=lambda: generated Rails-free controller/view adapters in #{lambda_dir}; active granularity=#{granularity}"
 else
   abort "unsupported ORES_BUILD_TARGET=#{target.inspect}; expected rails or lambda"
 end

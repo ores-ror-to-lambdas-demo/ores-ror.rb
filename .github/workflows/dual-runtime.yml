@@ -71,24 +71,26 @@ jobs:
         with:
           ruby-version: '3.4'
           bundler-cache: true
-      - name: Verify committed filesystem route tree
-        run: |
-          test -f 'routes/users/[id]/handler.rb'
-          test -f 'routes/orders/[id]/handler.rb'
-          test -f 'routes/orders/[id]/cancel/handler.rb'
-          test -f 'routes/profiles/[id]/preferences/handler.rb'
-          test "$(find routes -name handler.rb | wc -l)" -eq 13
+      - name: Verify no authored lambda route tree
+        run: test ! -d routes
       - run: ruby bin/build-runtime
-      - name: Verify URL-shaped generated route and grouped handler artifacts
+      - name: Verify Rails-free generated controller/view route adapters
         run: |
           test -f 'generated/lambda/routes/users/[id]/handler.rb'
           test -f 'generated/lambda/routes/orders/[id]/handler.rb'
           test -f 'generated/lambda/routes/orders/[id]/cancel/handler.rb'
-          test -f generated/lambda/groups/users/handler.rb
-          test -f generated/lambda/groups/orders/handler.rb
-          grep -Fq '"handler_granularity": "route"' generated/lambda/manifest.json
-          grep -Fq '"source_handler": "routes/users/[id]/handler.rb"' generated/lambda/manifest.json
-          ! grep -R -E 'config/environment|Rails\.application' generated/lambda
+          test -f 'generated/lambda/routes/profiles/[id]/preferences/handler.rb'
+          test "$(find generated/lambda/routes -name handler.rb | wc -l)" -eq 13
+          grep -Fq 'RAILS_CONTROLLER = "UsersController"' 'generated/lambda/routes/users/[id]/handler.rb'
+          grep -Fq 'CONTROLLER = OresApp::Controllers::Users' 'generated/lambda/routes/users/[id]/handler.rb'
+          grep -Fq 'ACTION = :show' 'generated/lambda/routes/users/[id]/handler.rb'
+          grep -Fq 'VIEW = "users/show"' 'generated/lambda/routes/users/[id]/handler.rb'
+          grep -Fq 'RAILS_CONTROLLER = "OrdersController"' 'generated/lambda/routes/orders/[id]/cancel/handler.rb'
+          grep -Fq 'ACTION = :cancel' 'generated/lambda/routes/orders/[id]/cancel/handler.rb'
+          grep -Fq 'VIEW = "orders/cancel"' 'generated/lambda/routes/orders/[id]/cancel/handler.rb'
+          grep -Fq '"rails_boot": false' generated/lambda/manifest.json
+          grep -Fq '"dispatch": "generated-plain-ruby-controller-view"' generated/lambda/manifest.json
+          ! grep -R -E 'config/environment|Rails\.application|ActionController|ActionView' generated/lambda
           test -z "$(git status --porcelain --untracked-files=all -- generated/)"
       - run: bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
       - run: bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
@@ -106,13 +108,13 @@ jobs:
           ruby-version: '3.4'
           bundler-cache: true
       - run: ruby bin/build-runtime
-      - name: Verify grouped dispatch build
+      - name: Verify grouped Rails-free dispatch build
         run: |
           grep -q '"handler_granularity": "group"' generated/lambda/manifest.json
           grep -q 'case route.name' generated/lambda/groups/orders/handler.rb
           grep -q 'OresGenerated::Groups::Orders' generated/lambda/entrypoint.rb
           grep -Fq 'require_relative "../../routes/orders/[id]/handler"' generated/lambda/groups/orders/handler.rb
-          ! grep -R -E 'config/environment|Rails\.application' generated/lambda
+          ! grep -R -E 'config/environment|Rails\.application|ActionController|ActionView' generated/lambda
       - run: bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
       - run: bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
 
@@ -124,7 +126,7 @@ jobs:
         run: docker build --platform linux/amd64 -f aws-lambda/Dockerfile -t ores-ror-truffleruby-lambda:test .
       - name: Verify container runtime line
         run: docker run --rm --entrypoint truffleruby ores-ror-truffleruby-lambda:test --version | tee truffleruby-version.txt
-      - name: Verify Rails gem is not installed in lambda image
+      - name: Prove Rails gem is absent from lambda image
         run: |
           docker run --rm --entrypoint truffleruby ores-ror-truffleruby-lambda:test \
             -e 'abort "rails gem present" unless Gem::Specification.find_all_by_name("rails").empty?'

@@ -3,7 +3,7 @@
 require "test_helper"
 
 class RuntimeContractTest < ActionDispatch::IntegrationTest
-  test "shared dispatcher reaches the physical health handler directly" do
+  test "shared plain Ruby dispatcher reaches the health controller core" do
     result = OresApp::Dispatcher.call({
       "method" => "GET",
       "path" => "/healthz",
@@ -16,7 +16,7 @@ class RuntimeContractTest < ActionDispatch::IntegrationTest
     assert_equal "direct-health", result.fetch("headers").fetch("x-request-id")
   end
 
-  test "health runs through Rails adapter and shared dispatcher" do
+  test "health runs through normal Rails controller and view" do
     get "/healthz", headers: { "x-request-id" => "contract-health" }
     assert response.successful?, response.body
     payload = JSON.parse(response.body)
@@ -27,13 +27,13 @@ class RuntimeContractTest < ActionDispatch::IntegrationTest
     assert_equal "contract-health", response.headers["x-request-id"]
   end
 
-  test "Rails router is generated from the shared route table" do
+  test "Rails router uses the same controller action metadata as codegen" do
     assert_recognizes(
-      { controller: "resources", action: "handle", ores_handler: "user", id: "demo-user" },
+      { controller: "users", action: "show", id: "demo-user" },
       { path: "/users/demo-user", method: :get }
     )
     assert_recognizes(
-      { controller: "resources", action: "handle", ores_handler: "checkout_session", id: "cart-1" },
+      { controller: "checkout_sessions", action: "create", id: "cart-1" },
       { path: "/checkout-sessions/cart-1", method: :post }
     )
   end

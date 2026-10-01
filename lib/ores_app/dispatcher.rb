@@ -4,7 +4,7 @@ require "json"
 require "uri"
 require_relative "routes"
 require_relative "middleware"
-require_relative "route_handlers"
+require_relative "controllers"
 
 module OresApp
   module Dispatcher
@@ -22,11 +22,7 @@ module OresApp
       request["isolate_pool"] = route.pool
 
       result = Middleware.call(route.middleware, request) do
-        if invoker
-          invoker.call(route, request)
-        else
-          RouteHandlers.call(route, request)
-        end
+        invoker ? invoker.call(route, request) : Controllers.fetch(route.controller).call(route.action, request)
       end
 
       serialize_response(result)
@@ -42,7 +38,6 @@ module OresApp
       query = stringify_keys(request["query"] || parse_query_string(request["query_string"]))
       content_type = request["content_type"].to_s
       content_type = headers["content-type"].to_s if content_type.empty?
-
       {
         "request_id" => request["request_id"] || headers["x-request-id"],
         "method" => request.fetch("method", "GET").to_s.upcase,
@@ -57,7 +52,6 @@ module OresApp
       return body unless body.is_a?(String)
       return nil if body.empty?
       return body unless content_type.downcase.include?("json")
-
       JSON.parse(body)
     rescue JSON::ParserError => error
       raise ArgumentError, "invalid JSON body: #{error.message}"
@@ -65,13 +59,8 @@ module OresApp
 
     def parse_query_string(query_string)
       return {} if query_string.nil? || query_string.to_s.empty?
-
       URI.decode_www_form(query_string.to_s).each_with_object({}) do |(key, value), out|
-        if out.key?(key)
-          out[key] = Array(out[key]) << value
-        else
-          out[key] = value
-        end
+        out[key] = out.key?(key) ? Array(out[key]) << value : value
       end
     end
 
@@ -81,18 +70,12 @@ module OresApp
       headers["content-type"] ||= "application/json; charset=utf-8"
       body = result[:body]
       body = JSON.generate(body) unless body.is_a?(String)
-
-      {
-        "status" => Integer(status),
-        "headers" => headers,
-        "body" => body
-      }
+      { "status" => Integer(status), "headers" => headers, "body" => body }
     end
 
     def stringify_keys(value)
       return value.transform_keys(&:to_s).transform_values { |entry| stringify_keys(entry) } if value.is_a?(Hash)
       return value.map { |entry| stringify_keys(entry) } if value.is_a?(Array)
-
       value
     end
     private_class_method :normalize_request, :normalize_body, :parse_query_string, :serialize_response, :stringify_keys
