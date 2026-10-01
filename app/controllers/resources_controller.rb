@@ -9,7 +9,7 @@ class ResourcesController < ApplicationController
       "method" => request.request_method,
       "path" => request.path,
       "query" => request.query_parameters,
-      "headers" => request.headers.to_h.select { |name, _| name.to_s.downcase == "content-type" || name.to_s.downcase == "x-request-id" },
+      "headers" => request.headers.to_h.select { |name, _| %w[content-type x-request-id].include?(name.to_s.downcase) },
       "content_type" => request.content_type,
       "body" => parsed_body
     )
@@ -17,7 +17,8 @@ class ResourcesController < ApplicationController
     result.fetch("headers", {}).each do |name, value|
       response.set_header(name, value)
     end
-    render body: result.fetch("body"), status: result.fetch("status"), content_type: result.dig("headers", "content-type")
+    self.status = result.fetch("status")
+    self.response_body = result.fetch("body")
   end
 
   private
