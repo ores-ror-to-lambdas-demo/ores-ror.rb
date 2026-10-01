@@ -1,6 +1,6 @@
 # frozen_string_literal: true
-# Appended to generated/graal/handler.rb by bin/build-runtime.
-# The generated source is evaluated exactly once per long-lived Graal Context.
+# Appended to every generated Graal route/group unit.
+# common.rb and this unit source are each evaluated exactly once in a long-lived Context.
 
 if defined?(ores_gs_http) && !defined?(ORES_GS_HTTP)
   ORES_GS_HTTP = ores_gs_http
@@ -12,7 +12,7 @@ module OresGenerated
 
     def call(request)
       OresApp::ThreadStateBoundary.call do
-        OresApp::Dispatcher.call(request, invoker: method(:invoke))
+        OresApp::Dispatcher.call(request, routes: OresGenerated::Routes::TABLE, invoker: method(:invoke))
       end
     end
   end
@@ -27,9 +27,6 @@ end
 
 request_invoker = method(:ores_graal_invoke)
 
-# Embedded Java places `ores_gs_http` in TruffleRuby's interactive top-level
-# language binding before evaluating this source. The alternate branch keeps
-# standalone smoke tests and other hosts able to install the capability once.
 ->(*args) do
   if args.length == 1 && args.first.is_a?(String)
     request_invoker.call(args.first)
