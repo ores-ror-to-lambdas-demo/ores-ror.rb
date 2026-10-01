@@ -6,4 +6,5 @@
 /vendor/bundle
 /vendor/bundle-*
 /generated/
+/.ores-generated/
 .env
