@@ -167,7 +167,7 @@ jobs:
           done
           cat lambda-response.json
           grep -q '"statusCode":200' lambda-response.json
-          grep -Fq '\\"execution_mode\\":\\"lambda\\"' lambda-response.json
+          grep -Fq '\"execution_mode\":\"lambda\"' lambda-response.json
           grep -q 'truffleruby' lambda-response.json
       - name: Show Lambda container log on failure
         if: failure()
