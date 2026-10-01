@@ -89,6 +89,10 @@ jobs:
           test "$(find app/controllers -name handler.rb | wc -l)" -eq 13
           git check-ignore -q app/controllers/users/show/handler.rb
           grep -Fq 'module Handler' app/controllers/users/show/handler.rb
+          grep -Fq 'CONTROLLER_CLASS = "Users::Show::EndpointController"' app/controllers/users/show/handler.rb
+          grep -Fq 'ACTION = "show"' app/controllers/users/show/handler.rb
+          grep -Fq 'VIEW_LOGICAL_PATH = "users/show/endpoint/show"' app/controllers/users/show/handler.rb
+          grep -Fq 'def rails_rack(env)' app/controllers/users/show/handler.rb
           grep -Fq '"handler_constant": "Users::Show::Handler"' generated/lambda/manifest.json
           bundle exec rails runner 'Rails.application.eager_load!; abort "generated handler not Zeitwerk-loadable" unless defined?(Users::Show::Handler)'
           grep -Fq '"handler_granularity": "route"' generated/lambda/manifest.json
