@@ -25,7 +25,7 @@ end
 
 def nested_module_source(constant_name, body)
   parts = constant_name.split("::")
-  indent = ""
+  indent = +""
   source = +""
 
   parts.each do |part|
