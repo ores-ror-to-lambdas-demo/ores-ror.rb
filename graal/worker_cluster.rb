@@ -4,6 +4,7 @@ require "json"
 require "net/http"
 require "thread"
 require "uri"
+require_relative "../lib/ores_app/dispatcher"
 require_relative "../lib/ores_app/routes"
 
 module OresGraal
@@ -15,6 +16,14 @@ module OresGraal
     value.to_s.split(/[^A-Za-z0-9]+/).reject(&:empty?).map { |part| part[0].upcase + part[1..].to_s }.join
   end
 
+  def encode_wire(value)
+    Marshal.dump(value).unpack1("H*")
+  end
+
+  def decode_wire(value)
+    Marshal.load(["#{value}"].pack("H*"))
+  end
+
   class HostHttpBridge
     def initialize(base_url: ENV.fetch("DATA_API_URL", "http://127.0.0.1:8787/v1"), token: ENV.fetch("DATA_API_TOKEN", ""))
       @base = URI(base_url)
@@ -23,11 +32,8 @@ module OresGraal
       @token = token.to_s
     end
 
-    def call(raw_json)
-      # raw_json originates in an inner context and is therefore a foreign
-      # Ruby object here. Interpolation creates an outer-context String before
-      # the JSON C extension attempts to wrap it.
-      payload = JSON.parse("#{raw_json}")
+    def call(raw_wire)
+      payload = OresGraal.decode_wire(raw_wire)
       uri = @base.dup
       uri.path = [@base.path.sub(%r{/\z}, ""), payload.fetch("path")].join
       query = payload["query"] || {}
@@ -51,9 +57,9 @@ module OresGraal
       http.open_timeout = Float(ENV.fetch("DATA_API_CONNECT_TIMEOUT", "2.0"))
       http.read_timeout = Float(ENV.fetch("DATA_API_READ_TIMEOUT", "10.0"))
       response = http.start { |client| client.request(request) }
-      JSON.generate("ok" => true, "status" => response.code.to_i, "body" => response.body.to_s)
+      OresGraal.encode_wire("ok" => true, "status" => response.code.to_i, "body" => response.body.to_s)
     rescue StandardError => error
-      JSON.generate("ok" => false, "error" => "#{error.class}: #{error.message}")
+      OresGraal.encode_wire("ok" => false, "error" => "#{error.class}: #{error.message}")
     end
   end
 
@@ -111,12 +117,13 @@ module OresGraal
 
           request, reply = job
           begin
-            request_json = JSON.generate(request)
-            foreign_raw = invoker.call(request_json, @host_http_bridge)
-            # The inner context returns a foreign String proxy. Materialize it
-            # in the outer context before JSON.parse reaches the C extension.
-            raw = "#{foreign_raw}"
-            reply << [:ok, JSON.parse(raw)]
+            foreign_wire = invoker.call(OresGraal.encode_wire(request), @host_http_bridge)
+            payload = OresGraal.decode_wire(foreign_wire)
+            if payload.fetch("ok")
+              reply << [:ok, payload]
+            else
+              reply << [:error, worker_error(payload)]
+            end
           rescue StandardError => error
             reply << [:error, error]
           end
@@ -126,54 +133,54 @@ module OresGraal
       @ready << [:error, error] unless ready_sent
     end
 
+    def worker_error(payload)
+      message = "#{payload.fetch("error_class", "RuntimeError")}: #{payload.fetch("message", "worker failed")}" 
+      if payload["error_class"] == "OresApp::HttpDatabase::Error"
+        OresApp::HttpDatabase::Error.new(payload.fetch("message", "data bridge failed"))
+      else
+        RuntimeError.new(message)
+      end
+    end
+
     def bootstrap_source
-      generated_handler = File.join(
-        @app_root,
-        "generated",
-        "lambda",
-        "routes",
-        OresApp::Routes.handler_relative_path(@route).delete_prefix("routes/")
-      )
-      generated_module = OresGraal.ruby_const(@route.name)
+      source_handler = File.join(@app_root, OresApp::Routes.handler_relative_path(@route))
+      handler_const = OresGraal.ruby_const(@route.name)
 
       <<~RUBY
         # frozen_string_literal: true
-        require "json"
-
         app_root = #{@app_root.dump}
         lib_root = File.join(app_root, "lib")
         $LOAD_PATH.unshift(lib_root) unless $LOAD_PATH.include?(lib_root)
 
         ORES_GRAAL_RUNTIME = true unless defined?(ORES_GRAAL_RUNTIME)
         ORES_GRAAL_WORKER = true unless defined?(ORES_GRAAL_WORKER)
-        require File.join(app_root, "lib", "ores_app", "dispatcher")
-        require #{generated_handler.dump}
+        require File.join(app_root, "lib", "ores_app", "handlers")
+        require #{source_handler.dump}
 
         module OresGraalWorkerEntrypoint
           EXPECTED_ROUTE = #{@route.name.inspect}
           CONTEXT_ID = #{@context_id.dump}
           POOL_KEY = #{@pool_key.dump}
-          HANDLER = OresGenerated::Routes::#{generated_module}
+          HANDLER = OresApp::RouteHandlers::#{handler_const}
           @invocations = 0
 
           module_function
 
-          def call_json(request_json, host_http_bridge)
+          def decode_wire(value)
+            Marshal.load(["\#{value}"].pack("H*"))
+          end
+
+          def encode_wire(value)
+            Marshal.dump(value).unpack1("H*")
+          end
+
+          def call_wire(request_wire, host_http_bridge)
             $ores_gs_http = host_http_bridge
-            # request_json belongs to the outer Ruby context. Interpolation
-            # creates a String owned by this worker context before JSON.parse.
-            request_text = "\#{request_json}"
-            request = JSON.parse(request_text)
-            response = OresApp::Dispatcher.call(request, invoker: lambda do |route, normalized_request|
-              unless route.name == EXPECTED_ROUTE
-                raise ArgumentError, "context \#{CONTEXT_ID} belongs to \#{EXPECTED_ROUTE.inspect}, got \#{route.name.inspect}"
-              end
-
-              HANDLER.call(normalized_request)
-            end)
-
+            request = decode_wire(request_wire)
+            response = HANDLER.call(request)
             @invocations += 1
-            JSON.generate(
+            encode_wire(
+              "ok" => true,
               "response" => response,
               "worker" => {
                 "model" => "graal-inner-context",
@@ -183,12 +190,18 @@ module OresGraal
                 "invocations" => @invocations
               }
             )
+          rescue StandardError => error
+            encode_wire(
+              "ok" => false,
+              "error_class" => error.class.name,
+              "message" => error.message.to_s
+            )
           ensure
             $ores_gs_http = nil
           end
         end
 
-        OresGraalWorkerEntrypoint.method(:call_json)
+        OresGraalWorkerEntrypoint.method(:call_wire)
       RUBY
     end
   end
@@ -248,22 +261,18 @@ module OresGraal
     end
 
     def call(request)
-      method = request.fetch("method", "GET").to_s.upcase
-      path = request.fetch("path", "/").to_s
-      match = OresApp::Routes.match(method, path)
-      return not_found unless match
-
-      route, = match
-      payload = pool_for(route).call(request)
-      response = payload.fetch("response")
-      worker = payload.fetch("worker")
-      headers = response["headers"] ||= {}
-      headers["x-ores-worker-model"] = worker.fetch("model")
-      headers["x-ores-worker-context"] = worker.fetch("context_id")
-      headers["x-ores-worker-pool"] = worker.fetch("pool_key")
-      headers["x-ores-worker-invocations"] = worker.fetch("invocations").to_s
-      headers["x-ores-host-pid"] = Process.pid.to_s
-      response
+      OresApp::Dispatcher.call(request, invoker: lambda do |route, normalized_request|
+        payload = pool_for(route).call(normalized_request)
+        response = payload.fetch("response")
+        worker = payload.fetch("worker")
+        headers = response[:headers] ||= {}
+        headers["x-ores-worker-model"] = worker.fetch("model")
+        headers["x-ores-worker-context"] = worker.fetch("context_id")
+        headers["x-ores-worker-pool"] = worker.fetch("pool_key")
+        headers["x-ores-worker-invocations"] = worker.fetch("invocations").to_s
+        headers["x-ores-host-pid"] = Process.pid.to_s
+        response
+      end)
     end
 
     def status
@@ -277,6 +286,9 @@ module OresGraal
         "pool_key" => "handler-path",
         "cross_handler_context_reuse" => false,
         "host_thread_strategy" => "one-host-thread-per-live-inner-context",
+        "routing_boundary" => "outer-host",
+        "worker_boundary" => "committed-handler",
+        "context_wire" => "marshal-hex",
         "database_transport" => "outer-host-http-bridge",
         "configured_handlers" => OresApp::Routes::TABLE.length,
         "initialized_pools" => pools
@@ -304,14 +316,6 @@ module OresGraal
           host_http_bridge: @host_http_bridge
         )
       end
-    end
-
-    def not_found
-      {
-        "status" => 404,
-        "headers" => { "content-type" => "application/json; charset=utf-8", "x-ores-host-pid" => Process.pid.to_s },
-        "body" => JSON.generate(error: "route not found")
-      }
     end
   end
 end
