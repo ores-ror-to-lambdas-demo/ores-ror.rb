@@ -31,9 +31,15 @@ module OresApp
         ok: true,
         service: "ores-ror.rb",
         runtime: HttpDatabase.runtime_name,
-        execution_mode: ENV.fetch("ORES_BUILD_TARGET", "rails"),
+        execution_mode: execution_mode,
         request_id: request["request_id"]
       })
+    end
+
+    def execution_mode
+      return "lambda" if defined?(ORES_GRAAL_RUNTIME) && ORES_GRAAL_RUNTIME
+
+      ENV.fetch("ORES_BUILD_TARGET", "rails")
     end
 
     def proxy(method, path, body: nil, query: nil)
@@ -54,6 +60,6 @@ module OresApp
         body: body
       }
     end
-    private_class_method :health, :proxy, :safe_id, :response
+    private_class_method :health, :execution_mode, :proxy, :safe_id, :response
   end
 end
