@@ -57,7 +57,8 @@ module OresGraal
       http.open_timeout = Float(ENV.fetch("DATA_API_CONNECT_TIMEOUT", "2.0"))
       http.read_timeout = Float(ENV.fetch("DATA_API_READ_TIMEOUT", "10.0"))
       response = http.start { |client| client.request(request) }
-      OresGraal.encode_wire("ok" => true, "status" => response.code.to_i, "body" => response.body.to_s)
+      body = response.body.to_s.empty? ? {} : JSON.parse(response.body)
+      OresGraal.encode_wire("ok" => true, "status" => response.code.to_i, "body" => body)
     rescue StandardError => error
       OresGraal.encode_wire("ok" => false, "error" => "#{error.class}: #{error.message}")
     end
