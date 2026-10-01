@@ -1,0 +1,15 @@
+{
+  "profile": "gs-rails-truffleruby-v1",
+  "app_root": "..",
+  "bootstrap": "graal/bootstrap.rb",
+  "rack_application": "Rails.application",
+  "max_concurrency_per_isolate": 5,
+  "max_isolate_age_seconds": 1800,
+  "idle_retire_seconds": 300,
+  "guest_created_threads": false,
+  "child_processes": false,
+  "native_ffi": false,
+  "raw_sockets": false,
+  "database_transport": "host-http",
+  "request_identity": "x-request-id"
+}
