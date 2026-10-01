@@ -17,6 +17,32 @@ def controller_class_name(controller_path)
   controller_path.split("/").map { |part| ruby_const(part) }.join("::") + "Controller"
 end
 
+def handler_constant_name(endpoint_dir)
+  controllers_root = Pathname.new(File.join(ROOT, "app", "controllers"))
+  relative = Pathname.new(endpoint_dir).relative_path_from(controllers_root)
+  (relative.each_filename.map { |part| ruby_const(part) } + ["Handler"]).join("::")
+end
+
+def nested_module_source(constant_name, body)
+  parts = constant_name.split("::")
+  indent = ""
+  source = +""
+
+  parts.each do |part|
+    source << "#{indent}module #{part}\n"
+    indent << "  "
+  end
+
+  body.each_line { |line| source << "#{indent}#{line}" }
+
+  parts.reverse_each do
+    indent = indent.delete_suffix("  ")
+    source << "#{indent}end\n"
+  end
+
+  source
+end
+
 def route_path(route)
   route.path.spec.to_s.sub("(.:format)", "")
 end
@@ -71,6 +97,7 @@ def discover_rails_routes
       endpoint_dir: Pathname.new(endpoint_dir).relative_path_from(Pathname.new(ROOT)).to_s,
       handler_file: handler_file,
       handler_path: handler_rel,
+      handler_constant: handler_constant_name(endpoint_dir),
       view_logical_path: view_logical_path,
       view_files: view_files,
       middleware: %w[request_id],
@@ -82,7 +109,35 @@ end
 
 def write_colocated_handler(route)
   FileUtils.mkdir_p(File.dirname(route.fetch(:handler_file)))
-  module_name = ruby_const(route.fetch(:name))
+
+  body = <<~RUBY
+    CONTROLLER_PATH = #{route.fetch(:controller).inspect}.freeze
+    CONTROLLER_CLASS = #{route.fetch(:controller_class).inspect}.freeze
+    ACTION = #{route.fetch(:action).inspect}.freeze
+    VIEW_LOGICAL_PATH = #{route.fetch(:view_logical_path).inspect}.freeze
+    VIEW_FILES = #{route.fetch(:view_files).inspect}.freeze
+
+    module_function
+
+    def call(request)
+      OresApp::Handlers.call(CONTROLLER_PATH, ACTION, request)
+    end
+
+    def rails_rack(env)
+      raise "Rails is not loaded in this runtime" unless defined?(Rails)
+
+      controller = CONTROLLER_CLASS.split("::").inject(Object) { |scope, name| scope.const_get(name) }
+      controller.action(ACTION).call(env)
+    end
+
+    def view_logical_path
+      VIEW_LOGICAL_PATH
+    end
+
+    def view_files
+      VIEW_FILES
+    end
+  RUBY
 
   File.write(route.fetch(:handler_file), <<~RUBY)
     # frozen_string_literal: true
@@ -94,44 +149,13 @@ def write_colocated_handler(route)
 
     require "ores_app/handlers"
 
-    module OresGenerated
-      module EndpointHandlers
-        module #{module_name}
-          CONTROLLER_PATH = #{route.fetch(:controller).inspect}.freeze
-          CONTROLLER_CLASS = #{route.fetch(:controller_class).inspect}.freeze
-          ACTION = #{route.fetch(:action).inspect}.freeze
-          VIEW_LOGICAL_PATH = #{route.fetch(:view_logical_path).inspect}.freeze
-          VIEW_FILES = #{route.fetch(:view_files).inspect}.freeze
-
-          module_function
-
-          def call(request)
-            OresApp::Handlers.call(CONTROLLER_PATH, ACTION, request)
-          end
-
-          def rails_rack(env)
-            raise "Rails is not loaded in this runtime" unless defined?(Rails)
-
-            controller = CONTROLLER_CLASS.split("::").inject(Object) { |scope, name| scope.const_get(name) }
-            controller.action(ACTION).call(env)
-          end
-
-          def view_logical_path
-            VIEW_LOGICAL_PATH
-          end
-
-          def view_files
-            VIEW_FILES
-          end
-        end
-      end
-    end
+    #{nested_module_source(route.fetch(:handler_constant), body)}
   RUBY
 end
 
 def write_generated_routes(routes)
   rows = routes.map do |route|
-    "      OresApp::Routes::Route.new(verb: #{route.fetch(:verb).inspect}, path: #{route.fetch(:path).inspect}, name: #{route.fetch(:name).inspect}, controller: #{route.fetch(:controller).inspect}, action: #{route.fetch(:action).inspect}, middleware: #{route.fetch(:middleware).inspect}, group: #{route.fetch(:group).inspect}, pool: #{route.fetch(:pool).inspect}, handler_path: #{route.fetch(:handler_path).inspect}, view_logical_path: #{route.fetch(:view_logical_path).inspect}, view_files: #{route.fetch(:view_files).inspect})"
+    "      OresApp::Routes::Route.new(verb: #{route.fetch(:verb).inspect}, path: #{route.fetch(:path).inspect}, name: #{route.fetch(:name).inspect}, controller: #{route.fetch(:controller).inspect}, action: #{route.fetch(:action).inspect}, middleware: #{route.fetch(:middleware).inspect}, group: #{route.fetch(:group).inspect}, pool: #{route.fetch(:pool).inspect}, handler_path: #{route.fetch(:handler_path).inspect}, handler_constant: #{route.fetch(:handler_constant).inspect}, view_logical_path: #{route.fetch(:view_logical_path).inspect}, view_files: #{route.fetch(:view_files).inspect})"
   end
 
   File.write(File.join(LAMBDA_DIR, "routes.rb"), <<~RUBY)
@@ -154,7 +178,7 @@ def write_group_handler(group, routes)
   group_dir = File.join(LAMBDA_DIR, "groups", group)
   FileUtils.mkdir_p(group_dir)
   cases = routes.map do |route|
-    %(when #{route.fetch(:name).inspect} then OresGenerated::EndpointHandlers::#{ruby_const(route.fetch(:name))}.call(request))
+    %(when #{route.fetch(:name).inspect} then #{route.fetch(:handler_constant)}.call(request))
   end.join("\n          ")
 
   File.write(File.join(group_dir, "handler.rb"), <<~RUBY)
@@ -170,7 +194,7 @@ def write_group_handler(group, routes)
             case route.name
             #{cases}
             else
-              raise ArgumentError, "route \#{route.name.inspect} does not belong to group #{group}"
+              raise ArgumentError, "route #{route.name.inspect} does not belong to group #{group}"
             end
           end
         end
@@ -186,14 +210,14 @@ def write_entrypoint(routes, granularity)
 
   if granularity == "route"
     cases = routes.map do |route|
-      %(when #{route.fetch(:name).inspect} then OresGenerated::EndpointHandlers::#{ruby_const(route.fetch(:name))}.call(request))
+      %(when #{route.fetch(:name).inspect} then #{route.fetch(:handler_constant)}.call(request))
     end.join("\n            ")
     resolver = <<~RUBY
       def invoke(route, request)
         case route.name
         #{cases}
         else
-          raise ArgumentError, "no generated endpoint handler for \#{route.name.inspect}"
+          raise ArgumentError, "no generated endpoint handler for #{route.name.inspect}"
         end
       end
     RUBY
@@ -209,7 +233,7 @@ def write_entrypoint(routes, granularity)
         case route.group
         #{cases}
         else
-          raise ArgumentError, "no generated group handler for \#{route.group.inspect}"
+          raise ArgumentError, "no generated group handler for #{route.group.inspect}"
         end
       end
     RUBY
@@ -278,7 +302,7 @@ when "lambda"
   }
 
   File.write(File.join(LAMBDA_DIR, "manifest.json"), JSON.pretty_generate(manifest) + "\n")
-  warn "build target=lambda: derived #{routes.length} endpoints from Rails routes; generated co-located handler.rb files; granularity=#{granularity}"
+  warn "build target=lambda: derived #{routes.length} endpoints from Rails routes; generated Zeitwerk-compatible co-located handlers; granularity=#{granularity}"
 else
   abort "unsupported ORES_BUILD_TARGET=#{target.inspect}; expected rails or lambda"
 end
