@@ -1,18 +1,35 @@
 # frozen_string_literal: true
+# Appended to generated/graal/handler.rb by bin/build-runtime.
+# The generated bundle is evaluated exactly once per long-lived Graal Context.
 
-ORES_GRAAL_RUNTIME = true unless defined?(ORES_GRAAL_RUNTIME)
-ORES_GS_HTTP = method(:gs_http) unless defined?(ORES_GS_HTTP)
+module OresGenerated
+  module GraalEntrypoint
+    module_function
 
-app_root = gs_app_root.to_s
-entrypoint = File.join(app_root, "generated", "lambda", "entrypoint.rb")
-raise "lambda runtime not generated; run ORES_BUILD_TARGET=lambda ruby bin/build-runtime" unless File.file?(entrypoint)
+    def call(request)
+      previous = Thread.current[:ores_invocation_context]
+      raise "invocation context leaked across worker reuse" if previous
 
-require "json"
-require entrypoint
-
-def ores_lambda_invoke(request_json)
-  request = JSON.parse(request_json)
-  JSON.generate(OresGenerated::LambdaEntrypoint.call(request))
+      Thread.current[:ores_invocation_context] = request
+      begin
+        OresApp::Dispatcher.call(request, invoker: method(:invoke))
+      ensure
+        Thread.current[:ores_invocation_context] = nil
+      end
+    end
+  end
 end
 
-method(:ores_lambda_invoke)
+def ores_graal_invoke(request_json)
+  request = JSON.parse(request_json.to_s)
+  JSON.generate(OresGenerated::GraalEntrypoint.call(request))
+end
+
+# Return a factory instead of trying method(:gs_http). The host passes its
+# capability explicitly once, during Context initialization, then keeps the
+# returned invoker warm for the lifetime of the isolate.
+->(http_capability, context_id = nil) do
+  Object.const_set(:ORES_GS_HTTP, http_capability) unless defined?(ORES_GS_HTTP)
+  Object.const_set(:ORES_GRAAL_CONTEXT_ID, context_id.to_s.freeze) unless defined?(ORES_GRAAL_CONTEXT_ID)
+  method(:ores_graal_invoke)
+end
