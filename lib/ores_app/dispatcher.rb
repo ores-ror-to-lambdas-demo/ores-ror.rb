@@ -4,7 +4,7 @@ require "json"
 require "uri"
 require_relative "routes"
 require_relative "middleware"
-require_relative "handlers"
+require_relative "route_handlers"
 
 module OresApp
   module Dispatcher
@@ -25,7 +25,7 @@ module OresApp
         if invoker
           invoker.call(route, request)
         else
-          Handlers.call(route.handler, request)
+          RouteHandlers.call(route, request)
         end
       end
 
