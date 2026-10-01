@@ -1,6 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require "digest"
 require "fileutils"
 require "json"
 require "pathname"
@@ -51,6 +52,38 @@ def route_verb(route)
   route.verb.to_s.gsub(/[\^$]/, "")
 end
 
+def route_identifier(route, verb:, path:, controller:, action:)
+  explicit = route.name&.to_s
+  return explicit unless explicit.nil? || explicit.empty?
+
+  digest = Digest::SHA256.hexdigest("#{verb} #{path} #{controller}##{action}")[0, 12]
+  "rails_#{digest}"
+end
+
+def clean_generated_handlers!
+  pattern = File.join(ROOT, "app", "controllers", "**", "handler.rb")
+  Dir.glob(pattern).each do |path|
+    contents = File.read(path)
+    unless contents.include?("GENERATED FILE. DO NOT EDIT OR COMMIT.")
+      abort "refusing to overwrite non-generated endpoint handler: #{path}"
+    end
+    FileUtils.rm_f(path)
+  end
+end
+
+def validate_handler_collisions!(routes)
+  collisions = routes.group_by { |route| route.fetch(:handler_path) }.select do |_path, members|
+    members.map { |route| [route.fetch(:controller), route.fetch(:action)] }.uniq.length > 1
+  end
+  return if collisions.empty?
+
+  detail = collisions.map do |path, members|
+    endpoints = members.map { |route| "#{route.fetch(:controller)}##{route.fetch(:action)}" }.uniq.join(", ")
+    "#{path}: #{endpoints}"
+  end.join("; ")
+  abort "endpoint-per-folder convention violated; multiple Rails endpoints map to one generated handler.rb: #{detail}"
+end
+
 def discover_rails_routes
   require File.join(ROOT, "config", "environment")
   Rails.application.eager_load!
@@ -59,21 +92,27 @@ def discover_rails_routes
     defaults = route.defaults
     controller = defaults[:controller].to_s
     action = defaults[:action].to_s
-    name = route.name&.to_s
     verb = route_verb(route)
     path = route_path(route)
 
-    next if controller.empty? || action.empty? || name.nil? || name.empty?
+    next if controller.empty? || action.empty?
     next if verb.empty? || verb.include?("|")
 
-    klass = controller_class_name(controller).constantize
-    method = klass.instance_method(action)
+    begin
+      klass = controller_class_name(controller).constantize
+      method = klass.instance_method(action)
+    rescue NameError
+      next
+    end
+
     source_file = method.source_location&.first
-    raise "cannot locate source for #{controller}##{action}" unless source_file
+    next unless source_file
 
     source_file = File.expand_path(source_file)
     controllers_root = File.join(ROOT, "app", "controllers") + File::SEPARATOR
-    raise "endpoint source must live under app/controllers: #{source_file}" unless source_file.start_with?(controllers_root)
+    next unless source_file.start_with?(controllers_root)
+
+    name = route_identifier(route, verb: verb, path: path, controller: controller, action: action)
 
     endpoint_dir = File.dirname(source_file)
     handler_file = File.join(endpoint_dir, "handler.rb")
@@ -275,8 +314,10 @@ when "lambda"
   granularity = ENV.fetch("ORES_LAMBDA_HANDLER_GRANULARITY", "route").downcase
   abort "ORES_LAMBDA_HANDLER_GRANULARITY must be route or group" unless %w[route group].include?(granularity)
 
+  clean_generated_handlers!
   routes = discover_rails_routes
-  abort "no named Rails controller routes discovered" if routes.empty?
+  abort "no application Rails controller routes discovered" if routes.empty?
+  validate_handler_collisions!(routes)
 
   routes.each { |route| write_colocated_handler(route) }
 
