@@ -178,7 +178,7 @@ def write_group_handler(group, routes)
   group_dir = File.join(LAMBDA_DIR, "groups", group)
   FileUtils.mkdir_p(group_dir)
   cases = routes.map do |route|
-    %(when #{route.fetch(:name).inspect} then #{route.fetch(:handler_constant)}.call(request))
+    %(when #{route.fetch(:name).inspect} then ::#{route.fetch(:handler_constant)}.call(request))
   end.join("\n          ")
 
   File.write(File.join(group_dir, "handler.rb"), <<~RUBY)
@@ -210,7 +210,7 @@ def write_entrypoint(routes, granularity)
 
   if granularity == "route"
     cases = routes.map do |route|
-      %(when #{route.fetch(:name).inspect} then #{route.fetch(:handler_constant)}.call(request))
+      %(when #{route.fetch(:name).inspect} then ::#{route.fetch(:handler_constant)}.call(request))
     end.join("\n            ")
     resolver = <<~RUBY
       def invoke(route, request)
