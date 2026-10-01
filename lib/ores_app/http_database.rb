@@ -106,12 +106,16 @@ module OresApp
       end
     end
 
-    def self.request(method, path, body: nil, query: {})
-      return GraalTransport.request(method, path, body: body, query: query) if GRAAL_RUNTIME
-
-      POOL.with { |session| session.request(method, path, body: body, query: query) }
-    rescue ConnectionPool::TimeoutError
-      raise Error, "HTTP data connection pool exhausted"
+    if GRAAL_RUNTIME
+      def self.request(method, path, body: nil, query: {})
+        GraalTransport.request(method, path, body: body, query: query)
+      end
+    else
+      def self.request(method, path, body: nil, query: {})
+        POOL.with { |session| session.request(method, path, body: body, query: query) }
+      rescue ConnectionPool::TimeoutError
+        raise Error, "HTTP data connection pool exhausted"
+      end
     end
   end
 end
