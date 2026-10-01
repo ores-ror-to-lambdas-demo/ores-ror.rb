@@ -5,4 +5,5 @@
 !/tmp/.keep
 /vendor/bundle
 /vendor/bundle-*
+/generated/
 .env
