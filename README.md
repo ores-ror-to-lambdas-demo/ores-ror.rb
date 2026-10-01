@@ -163,6 +163,7 @@ Rules:
 - each context handles at most one invocation at a time;
 - pools are lazy and independently sized;
 - outbound database HTTP goes through an outer-host bridge rather than application code choosing a different database implementation;
+- values crossing context boundaries are materialized into receiving-context Ruby strings before native/C-extension codecs consume them;
 - the current Ruby `Polyglot::InnerContext` API keeps each live context inside a block, so the implementation uses one owning **host thread per live context**, while still keeping the entire worker cluster in one OS process.
 
 Configure pool size with `ORES_GRAAL_CONTEXTS_PER_HANDLER`.
@@ -182,12 +183,18 @@ Routed responses expose proof headers:
 
 ```text
 x-ores-host-pid
-x-ores-worker-model\ nx-ores-worker-context
+x-ores-worker-model
+x-ores-worker-context
 x-ores-worker-pool
 x-ores-worker-invocations
 ```
 
-`graal/context_isolation_smoke.rb` also creates two actual inner contexts and verifies that context-local Ruby global state does not leak between them.
+The Graal proof programs are deliberately layered:
+
+- `graal/context_isolation_smoke.rb` proves two real inner contexts do not share Ruby global state.
+- `graal/context_bridge_smoke.rb` proves an inner context can call an admitted outer-host `Method` bridge.
+- `graal/worker_health_smoke.rb` executes the concrete health handler through its real context worker without the HTTP server.
+- the GitHub Actions cluster smoke boots `graal/server.rb`, invokes multiple handler paths, and verifies same host PID + distinct handler context identities + same-handler warm reuse.
 
 ## AWS Lambda packaging
 
@@ -239,6 +246,8 @@ CI verifies all of the following:
 - grouped Lambda code generation;
 - no Rails boot in Lambda/Graal artifacts;
 - direct TruffleRuby `Polyglot::InnerContext` state isolation;
+- admitted host callback interop into an inner context;
+- direct execution of a concrete route handler inside its context worker;
 - one Graal host PID shared by multiple handler pools while handler contexts remain distinct;
 - warm reuse only within the same handler pool;
 - TruffleRuby AWS Lambda container execution.
