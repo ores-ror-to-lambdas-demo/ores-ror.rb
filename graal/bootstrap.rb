@@ -3,7 +3,7 @@ ORES_GS_HTTP = method(:gs_http) unless defined?(ORES_GS_HTTP)
 
 app_root = gs_app_root.to_s
 rails_env = gs_rails_env.to_s
-bundle_path = gs_bundle_path.to_s
+bundle_path = File.join(app_root, "vendor", "bundle-truffleruby")
 ENV["BUNDLE_GEMFILE"] = File.join(app_root, "Gemfile")
 ENV["BUNDLE_PATH"] = bundle_path
 ENV["RAILS_ENV"] = rails_env
