@@ -7,17 +7,25 @@ module OresApp
   class HttpDatabase
     class Error < StandardError; end
 
-    GRAAL_RUNTIME = defined?(ORES_GRAAL_RUNTIME) && ORES_GRAAL_RUNTIME
+    GRAAL_RUNTIME = (defined?(ORES_GRAAL_RUNTIME) && ORES_GRAAL_RUNTIME) ||
+                    (defined?(ORES_GRAAL_WORKER) && ORES_GRAAL_WORKER)
 
     def self.runtime_name
+      return "truffleruby-graal-context" if defined?(ORES_GRAAL_WORKER) && ORES_GRAAL_WORKER
+
       GRAAL_RUNTIME ? "truffleruby-graal-lambda" : RUBY_ENGINE
     end
 
     class GraalTransport
       def self.request(method, path, body:, query:)
-        raise Error, "Graal host HTTP bridge is unavailable" unless defined?(ORES_GS_HTTP)
+        bridge = if defined?(ORES_GS_HTTP)
+                   ORES_GS_HTTP
+                 elsif defined?($ores_gs_http) && $ores_gs_http
+                   $ores_gs_http
+                 end
+        raise Error, "Graal host HTTP bridge is unavailable" unless bridge
 
-        raw = ORES_GS_HTTP.call(JSON.generate({
+        raw = bridge.call(JSON.generate({
           method: method.to_s.upcase,
           path: path,
           query: query || {},
