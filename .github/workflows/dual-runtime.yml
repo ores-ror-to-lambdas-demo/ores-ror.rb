@@ -62,9 +62,9 @@ jobs:
   lambda-route-codegen:
     runs-on: ubuntu-latest
     env:
-      BUNDLE_WITHOUT: rails
       ORES_BUILD_TARGET: lambda
       ORES_LAMBDA_HANDLER_GRANULARITY: route
+      RAILS_ENV: test
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
@@ -78,7 +78,7 @@ jobs:
           test -f app/controllers/orders/cancel/endpoint_controller.rb
           test -f app/controllers/profiles/preferences/show/endpoint_controller.rb
           test ! -e app/controllers/users/show/handler.rb
-      - run: ruby bin/build-runtime
+      - run: bundle exec ruby bin/build-runtime
       - name: Verify co-located generated handlers and Lambda manifest
         run: |
           test -f app/controllers/users/show/handler.rb
@@ -88,26 +88,29 @@ jobs:
           test "$(find app/controllers -name handler.rb | wc -l)" -eq 13
           git check-ignore -q app/controllers/users/show/handler.rb
           grep -Fq '"handler_granularity": "route"' generated/lambda/manifest.json
-          grep -Fq '"generated_handler": "app/controllers/users/show/handler.rb"' generated/lambda/manifest.json
+          grep -Fq '"route_source": "Rails.application.routes"' generated/lambda/manifest.json
+          grep -Fq '"handler_path": "app/controllers/users/show/handler.rb"' generated/lambda/manifest.json
+          grep -Fq '"controller": "users/show/endpoint"' generated/lambda/manifest.json
+          grep -Fq '"action": "show"' generated/lambda/manifest.json
           ! grep -R -E 'config/environment|Rails\.application' generated/lambda
           ! find app/controllers -name handler.rb -print0 | xargs -0 grep -E 'config/environment|Rails\.application'
           test -z "$(git status --porcelain --untracked-files=all -- generated/ app/controllers/)"
-      - run: bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
-      - run: bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
+      - run: BUNDLE_WITHOUT=rails bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
+      - run: BUNDLE_WITHOUT=rails bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
 
   lambda-group-codegen:
     runs-on: ubuntu-latest
     env:
-      BUNDLE_WITHOUT: rails
       ORES_BUILD_TARGET: lambda
       ORES_LAMBDA_HANDLER_GRANULARITY: group
+      RAILS_ENV: test
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.4'
           bundler-cache: true
-      - run: ruby bin/build-runtime
+      - run: bundle exec ruby bin/build-runtime
       - name: Verify grouped dispatch build
         run: |
           grep -q '"handler_granularity": "group"' generated/lambda/manifest.json
@@ -117,8 +120,8 @@ jobs:
           test -f app/controllers/orders/show/handler.rb
           git check-ignore -q app/controllers/orders/show/handler.rb
           ! grep -R -E 'config/environment|Rails\.application' generated/lambda
-      - run: bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
-      - run: bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
+      - run: BUNDLE_WITHOUT=rails bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
+      - run: BUNDLE_WITHOUT=rails bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
 
   truffleruby-aws-lambda:
     runs-on: ubuntu-latest

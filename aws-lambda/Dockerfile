@@ -1,4 +1,4 @@
-FROM oraclelinux:9-slim
+FROM oraclelinux:9-slim AS truffleruby-base
 
 ARG TARGETARCH
 ARG TRUFFLERUBY_VERSION=34.0.1
@@ -27,22 +27,42 @@ RUN set -eux; \
     rm -f /tmp/truffleruby.tar.gz; \
     /opt/truffleruby/lib/truffle/post_install_hook.sh
 
-ENV PATH=/opt/truffleruby/bin:${PATH} \
-    BUNDLE_PATH=/opt/ores-ror-bundle \
+ENV PATH=/opt/truffleruby/bin:${PATH}
+WORKDIR /var/task
+
+FROM truffleruby-base AS codegen
+
+ENV BUNDLE_PATH=/opt/codegen-bundle \
+    BUNDLE_GEMFILE=/src/Gemfile \
+    RAILS_ENV=test \
+    ORES_BUILD_TARGET=lambda
+
+WORKDIR /src
+COPY Gemfile ./Gemfile
+RUN bundle install --jobs 4 --retry 3
+COPY . /src
+RUN bundle exec ruby bin/build-runtime \
+    && test -f generated/lambda/manifest.json \
+    && test -f generated/lambda/entrypoint.rb \
+    && test -f app/controllers/users/show/handler.rb
+
+FROM truffleruby-base AS runtime
+
+ENV BUNDLE_PATH=/opt/ores-ror-bundle \
     BUNDLE_GEMFILE=/var/task/Gemfile \
     BUNDLE_WITHOUT=rails:test \
     ORES_BUILD_TARGET=lambda
 
 WORKDIR /var/task
-
 COPY Gemfile ./Gemfile
-RUN truffleruby --version \
-    && bundle install --jobs 4 --retry 3
-
+RUN bundle install --jobs 4 --retry 3
 COPY . /var/task
-RUN ORES_BUILD_TARGET=lambda truffleruby bin/build-runtime \
-    && test -f generated/lambda/manifest.json \
+COPY --from=codegen /src/generated /var/task/generated
+COPY --from=codegen /src/app/controllers /var/task/app/controllers
+
+RUN test -f generated/lambda/manifest.json \
     && test -f generated/lambda/entrypoint.rb \
+    && test -f app/controllers/users/show/handler.rb \
     && mkdir -p /var/runtime \
     && cp /var/task/aws-lambda/bootstrap /var/runtime/bootstrap \
     && chmod 0755 /var/runtime/bootstrap

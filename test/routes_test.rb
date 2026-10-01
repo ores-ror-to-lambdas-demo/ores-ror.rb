@@ -1,18 +1,45 @@
 require "test_helper"
 
 class RoutesTest < ActionDispatch::IntegrationTest
-  test "demo route surface is present" do
-    expected = %w[user cart checkout_session product order cancel_order account inventory recommendations search sessions preferences health]
-    names = Rails.application.routes.routes.filter_map { |route| route.name&.to_s }
-    assert_empty(expected - names)
+  test "Rails routes are the only endpoint routing source of truth" do
+    expected = {
+      "user" => ["users/show/endpoint", "show"],
+      "cart" => ["carts/show/endpoint", "show"],
+      "checkout_session" => ["checkout_sessions/create/endpoint", "create"],
+      "product" => ["products/show/endpoint", "show"],
+      "order" => ["orders/show/endpoint", "show"],
+      "cancel_order" => ["orders/cancel/endpoint", "cancel"],
+      "account" => ["accounts/show/endpoint", "show"],
+      "inventory" => ["inventory/show/endpoint", "show"],
+      "recommendations" => ["recommendations/show/endpoint", "show"],
+      "search" => ["search/index/endpoint", "index"],
+      "create_session" => ["sessions/create/endpoint", "create"],
+      "preferences" => ["profiles/preferences/show/endpoint", "show"],
+      "health" => ["healthz/show/endpoint", "show"]
+    }
+
+    actual = Rails.application.routes.routes.each_with_object({}) do |route, out|
+      next unless route.name && expected.key?(route.name.to_s)
+
+      out[route.name.to_s] = [route.defaults[:controller], route.defaults[:action]]
+    end
+
+    assert_equal expected, actual
   end
 
-  test "every route owns a tracked endpoint controller directory and generated handler location" do
-    OresApp::Routes::TABLE.each do |route|
-      assert File.file?(OresApp::Routes.controller_path(route)), "missing #{OresApp::Routes.controller_relative_path(route)}"
-      assert_equal File.join(route.endpoint_dir, "handler.rb"), OresApp::Routes.handler_relative_path(route)
-      assert_equal "#{route.endpoint_dir.delete_prefix("app/controllers/")}/endpoint", route.controller
-      assert_equal "call", route.action
+  test "each endpoint action is a normal Rails method under app/controllers" do
+    Rails.application.eager_load!
+
+    Rails.application.routes.routes.each do |route|
+      next unless route.name
+
+      controller = route.defaults[:controller].to_s
+      action = route.defaults[:action].to_s
+      next if controller.empty? || action.empty?
+
+      klass = "#{controller.camelize}Controller".constantize
+      source = klass.instance_method(action).source_location&.first
+      assert source&.include?("/app/controllers/"), "#{controller}##{action} is not backed by app/controllers"
     end
   end
 end

@@ -5,21 +5,23 @@ require_relative "../../lib/ores_app/dispatcher"
 class OresEndpointController < ApplicationController
   private
 
-  def dispatch_ores_endpoint(expected_route_name:)
-    result = OresApp::Dispatcher.call({
-      "request_id" => request.request_id,
-      "method" => request.request_method,
-      "path" => request.path,
-      "query" => request.query_parameters,
-      "headers" => request.headers.to_h.select { |name, _| %w[content-type x-request-id].include?(name.to_s.downcase) },
-      "content_type" => request.content_type,
-      "body" => parsed_body
-    })
+  def dispatch_ores_endpoint
+    path_params = request.path_parameters.to_h.reject { |key, _| %w[controller action].include?(key.to_s) }
 
-    matched = OresApp::Routes.match(request.request_method, request.path)
-    if matched && matched.first.name != expected_route_name
-      raise "endpoint controller mismatch: expected #{expected_route_name}, matched #{matched.first.name}"
-    end
+    result = OresApp::Dispatcher.call_direct(
+      {
+        "request_id" => request.request_id,
+        "method" => request.request_method,
+        "path" => request.path,
+        "query" => request.query_parameters,
+        "headers" => request.headers.to_h.select { |name, _| %w[content-type x-request-id].include?(name.to_s.downcase) },
+        "content_type" => request.content_type,
+        "body" => parsed_body,
+        "path_params" => path_params
+      },
+      controller_path: self.class.controller_path,
+      action: action_name
+    )
 
     result.fetch("headers", {}).each { |name, value| response.set_header(name, value) }
     self.status = result.fetch("status")

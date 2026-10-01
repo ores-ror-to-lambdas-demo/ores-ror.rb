@@ -3,7 +3,7 @@
 require "test_helper"
 
 class RuntimeContractTest < ActionDispatch::IntegrationTest
-  test "health runs through its endpoint-specific Rails controller" do
+  test "health runs through a conventional Rails controller action" do
     get "/healthz", headers: { "x-request-id" => "contract-health" }
     assert response.successful?, response.body
     payload = JSON.parse(response.body)
@@ -14,13 +14,13 @@ class RuntimeContractTest < ActionDispatch::IntegrationTest
     assert_equal "contract-health", response.headers["x-request-id"]
   end
 
-  test "Rails router maps endpoints to colocated controller directories" do
+  test "Rails router recognizes conventional controller and action names" do
     assert_recognizes(
-      { controller: "users/show/endpoint", action: "call", ores_handler: "user", ores_route_name: "user", id: "demo-user" },
+      { controller: "users/show/endpoint", action: "show", id: "demo-user" },
       { path: "/users/demo-user", method: :get }
     )
     assert_recognizes(
-      { controller: "checkout_sessions/create/endpoint", action: "call", ores_handler: "checkout_session", ores_route_name: "checkout_session", id: "cart-1" },
+      { controller: "checkout_sessions/create/endpoint", action: "create", id: "cart-1" },
       { path: "/checkout-sessions/cart-1", method: :post }
     )
   end
