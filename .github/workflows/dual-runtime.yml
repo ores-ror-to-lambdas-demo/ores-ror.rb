@@ -76,18 +76,19 @@ jobs:
           test -f 'routes/users/[id]/handler.rb'
           test -f 'routes/orders/[id]/handler.rb'
           test -f 'routes/orders/[id]/cancel/handler.rb'
+          test -f 'routes/orders/handler.rb'
           test -f 'routes/profiles/[id]/preferences/handler.rb'
-          test "$(find routes -name handler.rb | wc -l)" -eq 13
+          test "$(find routes -name handler.rb | wc -l)" -eq 14
       - run: ruby bin/build-runtime
-      - name: Verify URL-shaped generated route and grouped handler artifacts
+      - name: Verify generated artifacts are sourced from physical handlers
         run: |
           test -f 'generated/lambda/routes/users/[id]/handler.rb'
           test -f 'generated/lambda/routes/orders/[id]/handler.rb'
           test -f 'generated/lambda/routes/orders/[id]/cancel/handler.rb'
-          test -f generated/lambda/groups/users/handler.rb
           test -f generated/lambda/groups/orders/handler.rb
-          grep -Fq '"handler_granularity": "route"' generated/lambda/manifest.json
-          grep -Fq '"source_handler": "routes/users/[id]/handler.rb"' generated/lambda/manifest.json
+          grep -Fq 'Source of truth: routes/users/[id]/handler.rb' 'generated/lambda/routes/users/[id]/handler.rb'
+          grep -Fq 'source_handler' generated/lambda/manifest.json
+          grep -Fq '"route_authority": "filesystem"' generated/lambda/manifest.json
           ! grep -R -E 'config/environment|Rails\.application' generated/lambda
           test -z "$(git status --porcelain --untracked-files=all -- generated/)"
       - run: bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
@@ -106,15 +107,56 @@ jobs:
           ruby-version: '3.4'
           bundler-cache: true
       - run: ruby bin/build-runtime
-      - name: Verify grouped dispatch build
+      - name: Verify physical orders group drives grouped dispatch
         run: |
-          grep -q '"handler_granularity": "group"' generated/lambda/manifest.json
-          grep -q 'case route.name' generated/lambda/groups/orders/handler.rb
-          grep -q 'OresGenerated::Groups::Orders' generated/lambda/entrypoint.rb
-          grep -Fq 'require_relative "../../routes/orders/[id]/handler"' generated/lambda/groups/orders/handler.rb
+          grep -Fq '"handler_granularity": "group"' generated/lambda/manifest.json
+          grep -Fq 'register_group' generated/lambda/groups/orders/handler.rb
+          grep -Fq 'case route.name' generated/lambda/groups/orders/handler.rb
+          grep -Fq 'OresGenerated::Groups::Orders' generated/lambda/entrypoint.rb
           ! grep -R -E 'config/environment|Rails\.application' generated/lambda
       - run: bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
       - run: bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
+
+  graal-codegen:
+    runs-on: ubuntu-latest
+    env:
+      ORES_BUILD_TARGET: graal
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: truffleruby+graalvm-34.0.1
+          bundler-cache: false
+      - name: Generate immutable Graal source from physical handlers
+        run: truffleruby bin/build-runtime
+      - name: Verify bundle contains physical routes but no Rails/filesystem loading
+        run: |
+          test -f generated/graal/handler.rb
+          test -f generated/graal/manifest.json
+          grep -Fq '# --- PHYSICAL routes/users/[id]/handler.rb ---' generated/graal/handler.rb
+          grep -Fq '# --- PHYSICAL routes/orders/handler.rb ---' generated/graal/handler.rb
+          grep -Fq '"route_authority": "filesystem"' generated/graal/manifest.json
+          ! grep -E 'config/environment|Rails\.application|require_relative' generated/graal/handler.rb
+          test -z "$(git status --porcelain --untracked-files=all -- generated/)"
+      - name: Execute generated Graal handler directly on TruffleRuby with Rails absent
+        run: |
+          cat >/tmp/graal-smoke.rb <<'RUBY'
+          require "json"
+          def gs_http(payload)
+            request = JSON.parse(payload.to_s)
+            JSON.generate("ok" => true, "status" => 200, "body" => JSON.generate("target" => request.fetch("path")))
+          end
+          invoker = eval(File.read("generated/graal/handler.rb"), TOPLEVEL_BINDING, "generated/graal/handler.rb")
+          raise "Rails unexpectedly loaded" if defined?(Rails)
+          health = JSON.parse(invoker.call(JSON.generate("request_id" => "graal-health", "method" => "GET", "path" => "/healthz", "headers" => {})))
+          raise "health failed" unless health.fetch("status") == 200
+          raise "wrong runtime" unless health.fetch("body").include?("truffleruby-graal")
+          user = JSON.parse(invoker.call(JSON.generate("request_id" => "graal-user", "method" => "GET", "path" => "/users/demo", "headers" => {})))
+          raise "user route failed" unless user.fetch("body").include?("/users/demo")
+          puts health.fetch("body")
+          puts user.fetch("body")
+          RUBY
+          truffleruby /tmp/graal-smoke.rb
 
   truffleruby-aws-lambda:
     runs-on: ubuntu-latest
@@ -135,18 +177,13 @@ jobs:
           chmod +x aws-lambda-rie
       - name: Boot Lambda runtime locally and invoke generated health handler
         run: |
-          docker run --rm -d --name ores-ror-lambda \
-            -p 9000:8080 \
+          docker run --rm -d --name ores-ror-lambda -p 9000:8080 \
             -v "$PWD/aws-lambda-rie:/aws-lambda-rie:ro" \
             --entrypoint /aws-lambda-rie \
             ores-ror-truffleruby-lambda:test /var/runtime/bootstrap
           for n in $(seq 1 60); do
-            if curl --fail --silent \
-              -H 'content-type: application/json' \
-              -d @aws-lambda/event-v2.json \
-              http://127.0.0.1:9000/2015-03-31/functions/function/invocations >lambda-response.json; then
-              break
-            fi
+            if curl --fail --silent -H 'content-type: application/json' -d @aws-lambda/event-v2.json \
+              http://127.0.0.1:9000/2015-03-31/functions/function/invocations >lambda-response.json; then break; fi
             sleep 1
           done
           cat lambda-response.json
