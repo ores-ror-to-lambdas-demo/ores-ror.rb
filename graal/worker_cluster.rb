@@ -118,7 +118,7 @@ module OresGraal
             request = JSON.parse(request_json)
             response = OresApp::Dispatcher.call(request, invoker: lambda do |route, normalized_request|
               unless route.name == EXPECTED_ROUTE
-                raise ArgumentError, "context #{CONTEXT_ID} belongs to #{EXPECTED_ROUTE.inspect}, got \#{route.name.inspect}"
+                raise ArgumentError, "context \#{CONTEXT_ID} belongs to \#{EXPECTED_ROUTE.inspect}, got \#{route.name.inspect}"
               end
 
               HANDLER.call(normalized_request)
@@ -218,6 +218,7 @@ module OresGraal
         "contexts_per_handler" => contexts_per_handler,
         "pool_key" => "handler-path",
         "cross_handler_context_reuse" => false,
+        "host_thread_strategy" => "one-host-thread-per-live-inner-context",
         "configured_handlers" => OresApp::Routes::TABLE.length,
         "initialized_pools" => pools
       }
