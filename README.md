@@ -1,27 +1,38 @@
 # ores-ror.rb
 
-A conventional Rails reference server whose route contract can also be executed as admitted TruffleRuby lambdas on Graal Show.
+One Rails application, two execution modes, one source of truth.
 
-## Runtime modes
+## The rule
 
-1. **Rails reference mode** — ordinary Rails/Puma app for local development and route/response parity tests.
-2. **Graal isolate mode** — `graal/handler.rb` is the single-source, `json-string-v1` TruffleRuby artifact admitted by `graal-show/gs-compiler` and executed by the in-process supervisor in `ores-ror.infra`.
+There is no Graal-specific copy of the routes/controllers/business logic. `config/routes.rb`, the controllers, services, and middleware are the application in both modes.
 
-Rails itself is intentionally not smuggled into the untrusted guest context. Graal Show's `gs-graal-guest-v1` profile accepts one Ruby source file and no Gem/Bundler dependency graph. The isolate handler therefore mirrors the Rails route contract while using only `JSON` plus the capability-scoped `gs_http` support API.
+1. **Rails/Puma** boots the repository conventionally on MRI (or directly on TruffleRuby).
+2. **Graal supervisor mode** boots this exact Rails tree inside reusable TruffleRuby contexts owned by `ores-ror.infra`. Each request is sent through `Rails.application.call` as a Rack request.
 
-## Concurrency contract
+The old generated `graal/handler.rb` and duplicate `graal/routes.json` model was intentionally removed.
 
-Request identity is explicit (`request_id` / `invocation_id`). `Thread.current` may be used only for diagnostics; a pool thread is reused by many requests and must never own request state. Guest code cannot create threads. The host supervisor owns a fixed pool of at most five execution threads per isolate and creates a fresh Graal `Context` for every request while sharing the isolate `Engine` and cached `Source`.
+## Request/concurrency model
 
-## Database access
+Request identity is carried in the Rack request and `x-request-id`; it is never identified by `Thread.current`. A supervisor worker thread serves many requests over its lifetime. A warm Graal cell owns at most five reusable Rails/TruffleRuby contexts, so up to five requests can execute concurrently without sharing per-request Ruby state.
 
-There is no PostgreSQL wire-protocol adapter and no `pg` gem. Application data goes through an HTTP Data API. Rails reference mode pools persistent HTTP clients; isolate mode calls `gs_http`, whose host-side Java `HttpClient` is shared for the warm isolate and therefore reuses HTTP connections.
+Guest Rails code cannot create threads or child processes in supervisor mode. Native/FFI and direct socket access are disabled by the host. The only database/network capability is the host `gs_http` bridge.
 
-Environment:
+## HTTP database transport
 
-- `DATA_API_URL` — e.g. `https://data.example.internal/v1`
-- `DATA_API_TOKEN` — optional bearer token in Rails reference mode. Production isolate deployments should inject authorization at the trusted host/support-api layer rather than exposing arbitrary environment access to guest Ruby.
+`HttpDatabase` is the same service in both runtimes:
 
-## Routes
+- ordinary Rails uses a bounded persistent `Net::HTTP` connection pool;
+- Graal mode automatically uses `ORES_GS_HTTP`, the host-mediated HTTP bridge backed by a shared JDK `HttpClient` pool.
 
-The demo includes users, carts, checkout sessions, products, orders, order cancellation, accounts, inventory, recommendations, search, sessions, and health endpoints.
+There is no PostgreSQL wire-protocol connection from the Rails application.
+
+## CI
+
+`.github/workflows/dual-runtime.yml` proves:
+
+- Rails tests on MRI Ruby;
+- the same Rails tests on TruffleRuby/GraalVM;
+- the same checked-out Rails tree boots and serves Rack requests inside the Java/Graal supervisor;
+- a separate capability probe for true `Engine.spawnIsolate(true)` Ruby support.
+
+The final probe is deliberately separate because current GraalVM releases still do not list Ruby among supported Polyglot Native-Isolate languages. It must never silently downgrade an isolate request into an ordinary context.

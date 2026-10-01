@@ -1,0 +1,74 @@
+name: dual-runtime
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rails-mri:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+          bundler-cache: true
+      - run: bundle exec rails test
+
+  rails-truffleruby:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: truffleruby+graalvm
+          bundler-cache: true
+      - run: ruby -v
+      - run: bundle exec rails test
+
+  graal-supervisor:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Rails app
+        uses: actions/checkout@v4
+        with:
+          path: app
+      - name: Checkout Graal supervisor
+        uses: actions/checkout@v4
+        with:
+          repository: ores-ror-to-lambdas-demo/ores-ror.infra
+          path: infra
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.4'
+          bundler-cache: true
+          working-directory: app
+      - uses: actions/setup-java@v4
+        with:
+          distribution: graalvm
+          java-version: '25'
+          cache: maven
+      - name: Prove the same Rails tree boots inside embedded TruffleRuby
+        run: mvn -f infra/pom.xml test -Dapp.root="$GITHUB_WORKSPACE/app"
+
+  ruby-native-isolate-capability:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout Graal supervisor
+        uses: actions/checkout@v4
+        with:
+          repository: ores-ror-to-lambdas-demo/ores-ror.infra
+          path: infra
+      - uses: actions/setup-java@v4
+        with:
+          distribution: graalvm
+          java-version: '25'
+          cache: maven
+      - name: Probe upstream Ruby polyglot-isolate support
+        run: mvn -f infra/pom.xml -Dtest=NativeRubyIsolateCapabilityTest test

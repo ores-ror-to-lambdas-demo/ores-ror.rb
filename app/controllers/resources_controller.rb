@@ -51,6 +51,7 @@ class ResourcesController < ApplicationController
     render json: {
       ok: true,
       service: "ores-ror.rb",
+      runtime: HttpDatabase.runtime_name,
       request_id: request.request_id,
       thread_id_for_diagnostics_only: Thread.current.object_id
     }
