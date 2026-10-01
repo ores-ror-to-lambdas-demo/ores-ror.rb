@@ -1,0 +1,14 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "socket"
+
+host = ARGV.fetch(0, "127.0.0.1")
+port = Integer(ARGV.fetch(1), 10)
+path = ARGV.fetch(2, "/healthz")
+
+Socket.tcp(host, port, connect_timeout: 2) do |socket|
+  socket.write("GET #{path} HTTP/1.1\r\nHost: #{host}\r\nConnection: close\r\n\r\n")
+  status = socket.gets.to_s
+  abort "unhealthy HTTP response: #{status.inspect}" unless status.match?(/\AHTTP\/1\.[01] 2\d\d /)
+end
