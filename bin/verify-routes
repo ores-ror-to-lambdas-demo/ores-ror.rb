@@ -1,0 +1,10 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require_relative "../lib/ores_app/routes"
+require_relative "../lib/ores_app/route_handlers"
+
+OresApp::Routes.validate!
+OresApp::RouteHandlers.validate!
+
+puts "verified #{OresApp::Routes::TABLE.length} Rails routes against #{OresApp::Routes.filesystem_handler_paths.length} filesystem handlers"
