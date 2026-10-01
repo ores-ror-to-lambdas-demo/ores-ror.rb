@@ -1,4 +1,5 @@
 require "test_helper"
+require_relative "../lib/ores_app/route_handlers"
 
 class RoutesTest < ActionDispatch::IntegrationTest
   test "demo route surface is present" do
@@ -30,5 +31,13 @@ class RoutesTest < ActionDispatch::IntegrationTest
     OresApp::Routes::TABLE.each do |route|
       assert File.file?(OresApp::Routes.handler_path(route)), "missing #{OresApp::Routes.handler_relative_path(route)}"
     end
+  end
+
+  test "route table and filesystem handler tree are an exact contract" do
+    assert OresApp::Routes.validate!
+    assert OresApp::RouteHandlers.validate!
+
+    expected = OresApp::Routes::TABLE.map { |route| OresApp::Routes.handler_relative_path(route) }.sort
+    assert_equal expected, OresApp::Routes.filesystem_handler_paths
   end
 end
