@@ -1,0 +1,18 @@
+{
+  "version": "ores-ror-routes-v1",
+  "routes": [
+    {"name":"users.show","method":"GET","path":"/users/:id"},
+    {"name":"carts.show","method":"GET","path":"/carts/:id"},
+    {"name":"checkout_sessions.create","method":"POST","path":"/checkout-sessions/:id"},
+    {"name":"products.show","method":"GET","path":"/products/:id"},
+    {"name":"orders.show","method":"GET","path":"/orders/:id"},
+    {"name":"orders.cancel","method":"POST","path":"/orders/:id/cancel"},
+    {"name":"accounts.show","method":"GET","path":"/accounts/:id"},
+    {"name":"inventory.show","method":"GET","path":"/inventory/:id"},
+    {"name":"recommendations.show","method":"GET","path":"/recommendations/:id"},
+    {"name":"search.index","method":"GET","path":"/search"},
+    {"name":"sessions.create","method":"POST","path":"/sessions"},
+    {"name":"preferences.show","method":"GET","path":"/profiles/:id/preferences"},
+    {"name":"health.show","method":"GET","path":"/healthz"}
+  ]
+}
