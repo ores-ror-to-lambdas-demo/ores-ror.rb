@@ -4,11 +4,11 @@ require "test_helper"
 
 class RuntimeContractTest < ActionDispatch::IntegrationTest
   test "shared dispatcher reaches the physical health handler directly" do
-    result = OresApp::Dispatcher.call(
+    result = OresApp::Dispatcher.call({
       "method" => "GET",
       "path" => "/healthz",
       "headers" => { "x-request-id" => "direct-health" }
-    )
+    })
 
     assert_equal 200, result.fetch("status"), result.inspect
     payload = JSON.parse(result.fetch("body"))
@@ -29,11 +29,11 @@ class RuntimeContractTest < ActionDispatch::IntegrationTest
 
   test "Rails router is generated from the shared route table" do
     assert_recognizes(
-      { controller: "resources", action: "dispatch", ores_handler: "user", id: "demo-user" },
+      { controller: "users", action: "show", ores_handler: "user", id: "demo-user" },
       { path: "/users/demo-user", method: :get }
     )
     assert_recognizes(
-      { controller: "resources", action: "dispatch", ores_handler: "checkout_session", id: "cart-1" },
+      { controller: "checkout_sessions", action: "create", ores_handler: "checkout_session", id: "cart-1" },
       { path: "/checkout-sessions/cart-1", method: :post }
     )
   end
