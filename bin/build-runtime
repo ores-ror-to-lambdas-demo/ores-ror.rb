@@ -173,7 +173,7 @@ def write_graal_bundle(root, graal_dir, routes)
 
     ORES_GRAAL_RUNTIME = true unless defined?(ORES_GRAAL_RUNTIME)
     ORES_EXECUTION_MODE = "graal" unless defined?(ORES_EXECUTION_MODE)
-    raise "host must install ORES_GS_HTTP before bundle evaluation" unless defined?(ORES_GS_HTTP)
+    ORES_GS_HTTP = ores_gs_http unless defined?(ORES_GS_HTTP)
 
     module Ores
       module Context
@@ -278,6 +278,7 @@ def write_graal_bundle(root, graal_dir, routes)
     "runtime" => "truffleruby",
     "rails_boot" => false,
     "single_source" => true,
+    "host_http_binding" => "ores_gs_http",
     "context_lifetime" => "isolate",
     "request_state" => "explicit-per-invocation",
     "thread_identity_is_request_identity" => false,
