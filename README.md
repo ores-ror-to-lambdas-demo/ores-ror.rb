@@ -69,6 +69,23 @@ HTTP -> Rails router generated from shared route table -> thin controller adapte
 
 The two modes share application semantics, not Rails runtime state.
 
+## Rails concurrency contract
+
+Rails remains one ordinary Rails application. It is not copied into each Lambda or Graal context.
+
+Puma owns a bounded reusable request-thread pool. Production defaults are 50 minimum and 300 maximum threads, configurable with `RAILS_MIN_THREADS` and `RAILS_MAX_THREADS`; development and test keep smaller defaults. A physical thread may serve many requests over its lifetime.
+
+The runtime contract is therefore:
+
+```text
+request identity != Thread.current identity
+request lifetime  != worker-thread lifetime
+```
+
+Rails and third-party gems may continue to use `Thread.current` in the normal Ruby/Rails way, but request-specific thread-local state must obey the normal request cleanup lifecycle before that worker serves another request.
+
+The Graal path uses the same rule at a smaller scale: one long-lived Ruby Context per isolate, with a bounded host-owned pool of up to five reusable threads. Request identity is carried explicitly in the invocation envelope.
+
 ## Graal/TruffleRuby
 
 `graal/bootstrap.rb` loads only `generated/lambda/entrypoint.rb`. It does not boot Rails. The Graal supervisor can keep pools of long-lived TruffleRuby contexts and multiplex many requests through the generated route/group handlers, subject to the supervisor's concurrency/lifetime policy.

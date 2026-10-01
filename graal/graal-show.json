@@ -18,5 +18,9 @@
   "native_ffi": false,
   "raw_sockets": false,
   "database_transport": "host-http",
-  "request_identity": "x-request-id"
+  "request_identity": "x-request-id",
+  "context_lifetime": "isolate",
+  "request_state": "explicit-envelope",
+  "host_thread_pool": true,
+  "thread_identity_is_request_identity": false
 }
