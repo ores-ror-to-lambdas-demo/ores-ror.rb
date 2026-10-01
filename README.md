@@ -2,90 +2,119 @@
 
 One normal Rails application, plus generated Rails-free Lambda/Graal adapters.
 
-## Rails is the source of truth
+## Hard runtime boundary
 
-The application follows Rails conventions first. There is no parallel ORES route table.
+Rails boots **only** in normal Rails mode.
 
-`config/routes.rb` is the only route definition. Controllers live under `app/controllers` using normal Rails namespacing and normal action names:
+```text
+normal Rails/Puma
+  -> boots config/environment.rb
+  -> Rails.application
+  -> normal Rails controllers/views/middleware
+
+Lambda / Graal
+  -> never loads config/environment.rb
+  -> never initializes Rails.application
+  -> Rails gem is excluded
+  -> statically reads Rails source conventions
+  -> runs generated Rails-free handlers
+```
+
+That boundary applies to code generation too: Lambda/Graal generation does not boot Rails.
+
+## Rails remains canonical
+
+`config/routes.rb` is the route source of truth. Controllers and views use normal Rails paths:
 
 ```text
 app/controllers/
-├── application_controller.rb
-├── ores_endpoint_controller.rb
-├── users/
-│   └── show/
-│       ├── endpoint_controller.rb   # Users::Show::EndpointController#show
-│       └── handler.rb               # GENERATED; gitignored
-├── orders/
-│   ├── show/
-│   │   ├── endpoint_controller.rb   # Orders::Show::EndpointController#show
-│   │   └── handler.rb
-│   └── cancel/
-│       ├── endpoint_controller.rb   # Orders::Cancel::EndpointController#cancel
-│       └── handler.rb
-└── ...
+└── users/
+    └── show/
+        ├── endpoint_controller.rb   # Users::Show::EndpointController#show
+        └── handler.rb               # GENERATED; gitignored
 
 app/views/
-└── users/show/endpoint/
-    └── show.html.erb                 # normal Rails view lookup
+└── users/
+    └── show/
+        └── endpoint/
+            └── show.html.erb        # normal Rails view path
 ```
 
-Shared layouts, partials, and templates stay under normal `app/views` paths.
+Shared layouts, partials, helpers, mailers, jobs, models, and other Rails application code remain in their normal Rails locations.
 
-## Convention-over-configuration codegen
+The Rails app uses the normal full controller stack rather than API-only mode.
 
-For a Lambda build, the generator boots Rails **only at build time** and asks Rails for its real route set:
+## Rails-free convention discovery
+
+For a Lambda/Graal build:
 
 ```sh
-RAILS_ENV=test ORES_BUILD_TARGET=lambda bundle exec ruby bin/build-runtime
+BUNDLE_WITHOUT=rails ORES_BUILD_TARGET=lambda ruby bin/build-runtime
 ```
 
-For every named controller route it:
+The generator uses Ruby's static parser to read `config/routes.rb`; it does not require `config/environment.rb` and aborts if Rails has already been loaded.
 
-1. reads controller/action from `Rails.application.routes`;
-2. constantizes the normal Rails controller class;
-3. uses the action method's source location to find the real controller directory;
-4. writes an ignored `handler.rb` beside that controller;
-5. derives Rails' conventional logical view path from `controller_path/action`;
-6. records matching `app/views/<controller_path>/<action>.*` files;
-7. derives group/pool defaults from the top-level controller namespace;
-8. emits the Rails-free route table and aggregate Lambda entrypoint under ignored `generated/lambda/`.
+For each statically resolvable route it:
 
-There is no source-level route duplication to synchronize.
+1. reads the literal HTTP verb/path and conventional `to: "controller#action"`;
+2. resolves `app/controllers/<controller>_controller.rb` by Rails filesystem convention;
+3. verifies the action method exists in that source file without loading it;
+4. derives the Rails controller class name from the path;
+5. derives `app/views/<controller>/<action>.*` as the conventional view lookup;
+6. writes an ignored `handler.rb` beside the endpoint controller;
+7. emits a Rails-free route table and Lambda entrypoint under ignored `generated/lambda/`.
 
-## Generated handler contract
+The current demo deliberately fails closed on dynamic routing constructs such as `resources`, `namespace`, `scope`, `match`, and mounts rather than booting Rails to interpret them. Those constructs should be added to the static compiler explicitly.
 
-A generated handler records the Rails controller path, controller class, action, conventional view logical path, and discovered view files.
+## Generated handler sidecars
 
-Its FaaS `call(request)` path invokes the Rails-independent endpoint logic without loading Rails.
+A generated file such as:
 
-If Rails is present, `rails_rack(env)` resolves the canonical Rails controller and calls `.action(ACTION).call(env)`. This lets tooling hand control back to Rails rather than reproducing controller semantics.
+```text
+app/controllers/users/show/handler.rb
+```
+
+defines the path-compatible constant:
+
+```ruby
+Users::Show::Handler
+```
+
+and records:
+
+- `CONTROLLER_PATH`
+- `CONTROLLER_CLASS`
+- `CONTROLLER_FILE`
+- `ACTION`
+- `VIEW_LOGICAL_PATH`
+- `VIEW_FILES`
+
+Its executable path is Rails-free:
+
+```ruby
+Users::Show::Handler.call(request)
+```
+
+The handler never instantiates a Rails controller and never references the Rails constant. It adapts the statically discovered endpoint identity into the shared Rails-free business/runtime layer.
 
 ## Views
 
-Rails itself uses normal `app/views/<controller_path>/<action>.*` lookup. Generated handlers carry that same logical path and build-time file list, so a Lambda renderer can package or compile the templates Rails would resolve.
+Normal Rails mode resolves views normally through Rails.
 
-We intentionally do not alter Rails view paths.
+Lambda/Graal records the same logical view path and matching template files during static generation. The manifest also records `app/views` as the shared view root so generated runtimes can package templates, partials, and layouts without initializing Rails.
 
-## Runtime packaging
+## Lambda image
 
-Rails exists only in the code-generation stage. The AWS Lambda image uses a multi-stage build:
+The Lambda image installs with:
 
 ```text
-codegen stage
-  Rails + TruffleRuby
-  -> inspect Rails routes/controllers/views
-  -> generate handler.rb + manifest
-
-runtime stage
-  TruffleRuby
-  Rails excluded
-  -> copy generated artifacts
-  -> run Lambda
+BUNDLE_WITHOUT=rails:test
 ```
 
-The Graal worker consumes the same generated contract. Rails remains one ordinary Rails server and is never copied into each Lambda/isolate.
+before running codegen. CI asserts the Rails gem is absent, generates the handlers, scans generated Ruby for Rails boot references, and then exercises the Lambda adapter.
 
 ## Concurrency
 
-Rails uses a bounded reusable Puma pool. Graal isolates use one long-lived TruffleRuby Context per isolate with a small bounded host-owned thread pool. Request identity is explicit and is never physical thread identity.
+Normal Rails uses its bounded reusable Puma pool.
+
+Graal isolates use one long-lived TruffleRuby Context per isolate with a small bounded host-owned thread pool. Request identity is explicit and is never physical thread identity.
