@@ -1,8 +1,11 @@
 {
-  "profile": "gs-rails-truffleruby-v1",
+  "profile": "gs-ruby-lambda-v1",
   "app_root": "..",
   "bootstrap": "graal/bootstrap.rb",
-  "rack_application": "Rails.application",
+  "build_target_env": "ORES_BUILD_TARGET=lambda",
+  "generated_manifest": "generated/lambda/manifest.json",
+  "generated_entrypoint": "generated/lambda/entrypoint.rb",
+  "rails_boot": false,
   "max_concurrency_per_isolate": 5,
   "max_isolate_age_seconds": 1800,
   "idle_retire_seconds": 300,
