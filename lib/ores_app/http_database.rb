@@ -31,7 +31,10 @@ module OresApp
           query: query || {},
           body: body
         }))
-        response = JSON.parse(raw.to_s)
+        # Values crossing a Polyglot::InnerContext boundary are foreign proxies.
+        # Materialize a native String in this context before handing it to the
+        # JSON C extension, which expects a Ruby-owned object.
+        response = JSON.parse("#{raw}")
         raise Error, response.fetch("error", "host HTTP bridge failed") unless response["ok"]
 
         body_text = response.fetch("body", "")
