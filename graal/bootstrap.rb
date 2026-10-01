@@ -1,21 +1,41 @@
 # frozen_string_literal: true
+# Appended to generated/graal/handler.rb by bin/build-runtime.
+# The generated source is evaluated exactly once per long-lived Graal Context.
 
-ORES_GRAAL_RUNTIME = true unless defined?(ORES_GRAAL_RUNTIME)
-ORES_GS_HTTP = method(:gs_http) unless defined?(ORES_GS_HTTP)
+if defined?(ores_gs_http) && !defined?(ORES_GS_HTTP)
+  ORES_GS_HTTP = ores_gs_http
+end
 
-app_root = gs_app_root.to_s
-entrypoint = File.join(app_root, "generated", "lambda", "entrypoint.rb")
-raise "lambda runtime not generated; run ORES_BUILD_TARGET=lambda ruby bin/build-runtime" unless File.file?(entrypoint)
+module OresGenerated
+  module GraalEntrypoint
+    module_function
 
-require "json"
-require File.join(app_root, "lib", "ores_app", "thread_state_boundary")
-require entrypoint
-
-def ores_lambda_invoke(request_json)
-  OresApp::ThreadStateBoundary.call do
-    request = JSON.parse(request_json)
-    JSON.generate(OresGenerated::LambdaEntrypoint.call(request))
+    def call(request)
+      OresApp::ThreadStateBoundary.call do
+        OresApp::Dispatcher.call(request, invoker: method(:invoke))
+      end
+    end
   end
 end
 
-method(:ores_lambda_invoke)
+def ores_graal_invoke(request_json)
+  raise "Graal host HTTP capability is unavailable" unless defined?(ORES_GS_HTTP)
+
+  request = JSON.parse(request_json.to_s)
+  JSON.generate(OresGenerated::GraalEntrypoint.call(request))
+end
+
+request_invoker = method(:ores_graal_invoke)
+
+# Embedded Java places `ores_gs_http` in TruffleRuby's interactive top-level
+# language binding before evaluating this source. The alternate branch keeps
+# standalone smoke tests and other hosts able to install the capability once.
+->(*args) do
+  if args.length == 1 && args.first.is_a?(String)
+    request_invoker.call(args.first)
+  else
+    http_capability = args.fetch(0)
+    Object.const_set(:ORES_GS_HTTP, http_capability) unless defined?(ORES_GS_HTTP)
+    request_invoker
+  end
+end

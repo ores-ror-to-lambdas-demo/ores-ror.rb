@@ -10,7 +10,7 @@ module OresApp
     GRAAL_RUNTIME = defined?(ORES_GRAAL_RUNTIME) && ORES_GRAAL_RUNTIME
 
     def self.runtime_name
-      GRAAL_RUNTIME ? "truffleruby-graal-lambda" : RUBY_ENGINE
+      GRAAL_RUNTIME ? "truffleruby-graal" : RUBY_ENGINE
     end
 
     class GraalTransport
