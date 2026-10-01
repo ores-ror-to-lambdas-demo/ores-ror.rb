@@ -10,16 +10,23 @@ module OresApp
   module Dispatcher
     module_function
 
-    def call(raw_request)
+    def call(raw_request, invoker: nil)
       request = normalize_request(raw_request)
       match = Routes.match(request.fetch("method"), request.fetch("path"))
       return serialize_response(status: 404, headers: {}, body: { error: "route not found" }) unless match
 
       route, path_params = match
       request["path_params"] = path_params
+      request["route_name"] = route.name
+      request["route_group"] = route.group
+      request["isolate_pool"] = route.pool
 
       result = Middleware.call(route.middleware, request) do
-        Handlers.call(route.handler, request)
+        if invoker
+          invoker.call(route, request)
+        else
+          Handlers.call(route.handler, request)
+        end
       end
 
       serialize_response(result)
