@@ -8,12 +8,28 @@ module OresApp
     module_function
 
     def call(route_or_name, request)
+      handler_module(route_or_name).call(request)
+    end
+
+    def handler_module(route_or_name)
       route = resolve_route(route_or_name)
       handler_path = Routes.handler_path(route)
       raise LoadError, "missing route handler: #{Routes.handler_relative_path(route)}" unless File.file?(handler_path)
 
       require handler_path
-      const_get(const_name(route.name), false).call(request)
+      const_name = const_name(route.name)
+      raise LoadError, "route handler #{Routes.handler_relative_path(route)} did not define OresApp::RouteHandlers::#{const_name}" unless const_defined?(const_name, false)
+
+      const_get(const_name, false)
+    end
+
+    def validate!
+      Routes::TABLE.each do |route|
+        handler = handler_module(route)
+        raise TypeError, "route handler #{Routes.handler_relative_path(route)} must respond to .call" unless handler.respond_to?(:call)
+      end
+
+      true
     end
 
     def resolve_route(route_or_name)
