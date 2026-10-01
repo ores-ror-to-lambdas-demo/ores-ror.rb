@@ -1,6 +1,6 @@
 # ores-ror.rb
 
-One repository, two build modes, one application contract.
+One repository, two runtime surfaces, one application contract.
 
 ## Invariant
 
@@ -11,7 +11,7 @@ The checkout is not edited to switch runtimes. Environment variables select the 
 ORES_BUILD_TARGET=rails bundle exec rails server
 
 # Lambda/Graal artifact generation; no Rails boot
-ORES_BUILD_TARGET=lambda ruby bin/build-runtime
+ORES_BUILD_TARGET=lambda bundle exec ruby bin/build-runtime
 ```
 
 Generated artifacts live under `generated/` and are intentionally ignored by Git.
@@ -57,7 +57,7 @@ The Rails and FaaS surfaces are adapters around the same shared application/busi
 - HTTP method and URL path
 - logical handler ID
 - middleware
-- handler group / isolate pool
+- handler group / scheduling pool metadata
 - Rails controller and action
 - committed filesystem handler path
 
@@ -74,7 +74,7 @@ GET /users/:id
 Run it directly without booting Rails:
 
 ```sh
-ruby bin/verify-routes
+bundle exec ruby bin/verify-routes
 ```
 
 ## Request flow
@@ -90,18 +90,20 @@ HTTP
   -> shared application/business logic
 ```
 
-Lambda/Graal mode:
+Graal worker-server mode:
 
 ```text
-HTTP/event
+HTTP
+  -> one outer TruffleRuby/Graal host process
   -> shared route match
-  -> shared middleware
-  -> generated route/group wrapper
+  -> pool keyed by exact routes/**/handler.rb path
+  -> one Polyglot::InnerContext worker
+  -> generated route wrapper
   -> committed routes/**/handler.rb
   -> shared application/business logic
 ```
 
-Rails controllers and FaaS handlers therefore share semantics without requiring the Lambda/Graal runtime to boot Rails.
+Rails controllers and FaaS handlers therefore share semantics without requiring the Graal worker runtime to boot Rails.
 
 ## Generated Lambda/Graal topology
 
@@ -115,7 +117,7 @@ generated/lambda/routes/orders/[id]/cancel/handler.rb
 ...
 ```
 
-It also emits optional grouped handlers:
+It also emits optional grouped Lambda dispatchers:
 
 ```text
 generated/lambda/groups/users/handler.rb
@@ -124,22 +126,101 @@ generated/lambda/groups/system/handler.rb
 ...
 ```
 
-Choose the active dispatch granularity at build time:
+Choose the active Lambda dispatch granularity at build time:
 
 ```sh
-ORES_BUILD_TARGET=lambda ORES_LAMBDA_HANDLER_GRANULARITY=route ruby bin/build-runtime
-ORES_BUILD_TARGET=lambda ORES_LAMBDA_HANDLER_GRANULARITY=group ruby bin/build-runtime
+ORES_BUILD_TARGET=lambda ORES_LAMBDA_HANDLER_GRANULARITY=route bundle exec ruby bin/build-runtime
+ORES_BUILD_TARGET=lambda ORES_LAMBDA_HANDLER_GRANULARITY=group bundle exec ruby bin/build-runtime
 ```
 
-`route` gives one generated wrapper per URL route. `group` allows a larger isolate to load a family such as all order routes and switch on the matched route. Neither mode changes the Rails source tree.
+`route` gives one generated wrapper per URL route. `group` gives Lambda/event packaging a larger dispatcher that can switch among a family of routes. **Grouped Lambda dispatch does not weaken the Graal worker boundary:** `graal/server.rb` always keys its context pools by the concrete `handler.rb` path.
 
-The generated manifest records both sides of the contract, including the Rails controller/action, committed source handler, generated route handler, grouped handler, middleware, group, and isolate pool.
+The generated manifest records both sides of the contract, including the Rails controller/action, committed source handler, generated route handler, grouped handler, middleware, group, and Graal context-pool key.
 
-## Graal/TruffleRuby packaging
+## Graal worker model
+
+A Graal worker means one TruffleRuby `Polyglot::InnerContext`, not an OS process.
+
+```text
+one OS process / TruffleRuby JVM host
+└── shared Graal runtime and code-sharing domain
+    ├── routes/healthz/handler.rb pool
+    │   ├── Context 0
+    │   └── Context 1
+    ├── routes/users/[id]/handler.rb pool
+    │   ├── Context 0
+    │   └── Context 1
+    └── routes/orders/[id]/handler.rb pool
+        ├── Context 0
+        └── Context 1
+```
+
+Rules:
+
+- pool identity is the exact committed `handler.rb` path;
+- a context is never reassigned across handler identities;
+- a warm context may serve later requests for the same handler;
+- each context handles at most one invocation at a time;
+- pools are lazy and independently sized;
+- outbound database HTTP goes through an outer-host bridge rather than application code choosing a different database implementation;
+- the current Ruby `Polyglot::InnerContext` API keeps each live context inside a block, so the implementation uses one owning **host thread per live context**, while still keeping the entire worker cluster in one OS process.
+
+Configure pool size with `ORES_GRAAL_CONTEXTS_PER_HANDLER`.
+
+```sh
+ORES_BUILD_TARGET=lambda bundle exec ruby bin/build-runtime
+ORES_GRAAL_CONTEXTS_PER_HANDLER=2 bundle exec truffleruby --jvm graal/server.rb
+```
+
+Inspect the live host and lazily initialized pools:
+
+```sh
+curl http://127.0.0.1:3200/__ores/cluster
+```
+
+Routed responses expose proof headers:
+
+```text
+x-ores-host-pid
+x-ores-worker-model\ nx-ores-worker-context
+x-ores-worker-pool
+x-ores-worker-invocations
+```
+
+`graal/context_isolation_smoke.rb` also creates two actual inner contexts and verifies that context-local Ruby global state does not leak between them.
+
+## AWS Lambda packaging
 
 `graal/bootstrap.rb` loads the generated Lambda entrypoint and does not boot Rails. The runtime image contains the shared `lib/` application code, committed `routes/` handlers, and generated wrappers.
 
-This means the same Git repository remains a normal Rails app while also producing independently deployable TruffleRuby/Graal route or grouped-handler artifacts.
+This means the same Git repository remains a normal Rails app while also producing independently deployable TruffleRuby/Graal handler artifacts.
+
+## Local deployment with ores-compose
+
+`.ores-compose.yaml` starts both surfaces as native host services:
+
+- Rails/Puma at `127.0.0.1:3100`;
+- one TruffleRuby/Graal host at `127.0.0.1:3200`, with context workers inside that process.
+
+If the repository is already cloned:
+
+```sh
+./bin/local-install-mri.sh
+./bin/local-install-truffleruby.sh
+
+/path/to/ores-compose check .ores-compose.yaml
+/path/to/ores-compose plan .ores-compose.yaml
+ORES_COMPOSE_SKIP_ZED_PKG=true ORES_COMPOSE_SKIP_RPC_GEN=true \
+  /path/to/ores-compose up .ores-compose.yaml
+```
+
+For a fresh machine/workspace, `bin/clone-build-deploy-local.sh` clones and builds `ORESoftware/ores-compose`, clones this repository, installs both Ruby dependency sets, verifies/builds the route runtime, validates the compose plan, and finally runs `ores-compose up`.
+
+```sh
+bash bin/clone-build-deploy-local.sh
+```
+
+Set `CHECK_ONLY=true` to stop after clone/build/check/plan instead of starting the attached stack.
 
 ## Rails concurrency contract
 
@@ -151,10 +232,13 @@ The Graal path follows the same semantic rule: long-lived contexts/threads may s
 
 CI verifies all of the following:
 
-- MRI Rails tests and server boot
-- TruffleRuby Rails tests and server boot
-- exact Rails-controller / committed-handler route parity
-- per-route Lambda code generation
-- grouped Lambda code generation
-- no Rails boot in Lambda/Graal artifacts
-- TruffleRuby AWS Lambda container execution
+- MRI Rails tests and real Puma server boot;
+- TruffleRuby Rails tests and real Puma server boot;
+- exact Rails-controller / committed-handler route parity;
+- per-route Lambda code generation;
+- grouped Lambda code generation;
+- no Rails boot in Lambda/Graal artifacts;
+- direct TruffleRuby `Polyglot::InnerContext` state isolation;
+- one Graal host PID shared by multiple handler pools while handler contexts remain distinct;
+- warm reuse only within the same handler pool;
+- TruffleRuby AWS Lambda container execution.
