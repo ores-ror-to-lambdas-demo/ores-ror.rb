@@ -6,7 +6,7 @@ ARG TRUFFLERUBY_VERSION=34.0.1
 RUN microdnf install -y \
       ca-certificates curl gzip tar xz \
       gcc gcc-c++ make pkgconf-pkg-config \
-      zlib-devel libxml2-devel libxslt-devel openssl-devel libffi-devel \
+      openssl-devel libffi-devel \
     && microdnf clean all
 
 RUN set -eux; \
@@ -30,19 +30,20 @@ RUN set -eux; \
 ENV PATH=/opt/truffleruby/bin:${PATH} \
     BUNDLE_PATH=/opt/ores-ror-bundle \
     BUNDLE_GEMFILE=/var/task/Gemfile \
-    RAILS_ENV=production \
-    RACK_ENV=production \
-    RAILS_LOG_TO_STDOUT=1
+    BUNDLE_WITHOUT=rails \
+    ORES_BUILD_TARGET=lambda
 
 WORKDIR /var/task
 
 COPY Gemfile ./Gemfile
 RUN truffleruby --version \
-    && bundle config set build.nokogiri --use-system-libraries \
     && bundle install --jobs 4 --retry 3
 
 COPY . /var/task
-RUN mkdir -p /var/runtime \
+RUN ORES_BUILD_TARGET=lambda truffleruby bin/build-runtime \
+    && test -f generated/lambda/manifest.json \
+    && test -f generated/lambda/entrypoint.rb \
+    && mkdir -p /var/runtime \
     && cp /var/task/aws-lambda/bootstrap /var/runtime/bootstrap \
     && chmod 0755 /var/runtime/bootstrap
 
