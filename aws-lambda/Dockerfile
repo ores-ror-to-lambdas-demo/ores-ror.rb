@@ -37,10 +37,11 @@ WORKDIR /var/task
 
 COPY Gemfile ./Gemfile
 RUN truffleruby --version \
-    && bundle install --jobs 4 --retry 3
+    && bundle install --jobs 4 --retry 3 \
+    && bundle exec truffleruby -e 'require "connection_pool"; require "base64"'
 
 COPY . /var/task
-RUN ORES_BUILD_TARGET=lambda truffleruby bin/build-runtime \
+RUN ORES_BUILD_TARGET=lambda bundle exec truffleruby bin/build-runtime \
     && test -f generated/lambda/manifest.json \
     && test -f generated/lambda/entrypoint.rb \
     && mkdir -p /var/runtime \
