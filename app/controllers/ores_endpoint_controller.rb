@@ -6,7 +6,7 @@ class OresEndpointController < ApplicationController
   private
 
   def dispatch_ores_endpoint(expected_route_name:)
-    result = OresApp::Dispatcher.call(
+    result = OresApp::Dispatcher.call({
       "request_id" => request.request_id,
       "method" => request.request_method,
       "path" => request.path,
@@ -14,7 +14,7 @@ class OresEndpointController < ApplicationController
       "headers" => request.headers.to_h.select { |name, _| %w[content-type x-request-id].include?(name.to_s.downcase) },
       "content_type" => request.content_type,
       "body" => parsed_body
-    )
+    })
 
     matched = OresApp::Routes.match(request.request_method, request.path)
     if matched && matched.first.name != expected_route_name
