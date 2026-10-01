@@ -4,6 +4,7 @@
 require "fileutils"
 require "json"
 require_relative "../lib/ores_app/routes"
+require_relative "../lib/ores_app/route_handlers"
 
 def ruby_const(value)
   value.to_s.split(/[^A-Za-z0-9]+/).reject(&:empty?).map { |part| part[0].upcase + part[1..].to_s }.join
@@ -141,14 +142,12 @@ when "lambda"
   granularity = ENV.fetch("ORES_LAMBDA_HANDLER_GRANULARITY", "route").downcase
   abort "ORES_LAMBDA_HANDLER_GRANULARITY must be route or group" unless %w[route group].include?(granularity)
 
+  OresApp::Routes.validate!
+  OresApp::RouteHandlers.validate!
+
   FileUtils.rm_rf(lambda_dir)
   FileUtils.mkdir_p(lambda_dir)
   routes = OresApp::Routes::TABLE
-
-  missing_handlers = routes.reject { |route| File.file?(OresApp::Routes.handler_path(route)) }
-  unless missing_handlers.empty?
-    abort "missing committed route handlers: #{missing_handlers.map { |route| OresApp::Routes.handler_relative_path(route) }.join(", ")}"
-  end
 
   routes.each { |route| write_route_handler(lambda_dir, route) }
   routes.group_by(&:group).each { |group, grouped_routes| write_group_handler(lambda_dir, group, grouped_routes) }
@@ -163,6 +162,9 @@ when "lambda"
       middleware: route.middleware,
       group: route.group,
       pool: route.pool,
+      rails_controller: route.controller,
+      rails_action: route.action,
+      rails_controller_source: OresApp::Routes.rails_controller_relative_path(route),
       source_handler: OresApp::Routes.handler_relative_path(route),
       route_handler: "generated/lambda/routes/#{generated_route_relative_path(route)}",
       group_handler: "generated/lambda/groups/#{route.group}/handler.rb"
