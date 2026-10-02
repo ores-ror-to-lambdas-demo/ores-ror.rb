@@ -10,21 +10,21 @@ module OresApp
       key = "#{controller_path}##{action}"
 
       case key
-      when "users/show/endpoint#show"                then proxy(:get,  "/users/#{safe_id(request)}")
-      when "carts/show/endpoint#show"                then proxy(:get,  "/carts/#{safe_id(request)}")
+      when "users/show/endpoint#show"                 then proxy(:get,  "/users/#{safe_id(request)}")
+      when "carts/show/endpoint#show"                 then proxy(:get,  "/carts/#{safe_id(request)}")
       when "checkout_sessions/create/endpoint#create" then proxy(:post, "/checkout-sessions/#{safe_id(request)}", body: request["body"])
-      when "products/show/endpoint#show"             then proxy(:get,  "/products/#{safe_id(request)}")
-      when "orders/show/endpoint#show"               then proxy(:get,  "/orders/#{safe_id(request)}")
-      when "orders/cancel/endpoint#cancel"           then proxy(:post, "/orders/#{safe_id(request)}/cancel", body: request["body"])
-      when "accounts/show/endpoint#show"             then proxy(:get,  "/accounts/#{safe_id(request)}")
-      when "inventory/show/endpoint#show"            then proxy(:get,  "/inventory/#{safe_id(request)}")
-      when "recommendations/show/endpoint#show"      then proxy(:get,  "/recommendations/#{safe_id(request)}", query: request["query"])
-      when "search/index/endpoint#index"             then proxy(:get,  "/search", query: request["query"])
-      when "sessions/create/endpoint#create"         then proxy(:post, "/sessions", body: request["body"])
-      when "profiles/preferences/show/endpoint#show" then proxy(:get,  "/profiles/#{safe_id(request)}/preferences")
-      when "healthz/show/endpoint#show"              then health(request)
+      when "products/show/endpoint#show"              then proxy(:get,  "/products/#{safe_id(request)}")
+      when "orders/show/endpoint#show"                then proxy(:get,  "/orders/#{safe_id(request)}")
+      when "orders/cancel/endpoint#cancel"            then proxy(:post, "/orders/#{safe_id(request)}/cancel", body: request["body"])
+      when "accounts/show/endpoint#show"              then proxy(:get,  "/accounts/#{safe_id(request)}")
+      when "inventory/show/endpoint#show"             then proxy(:get,  "/inventory/#{safe_id(request)}")
+      when "recommendations/show/endpoint#show"       then proxy(:get,  "/recommendations/#{safe_id(request)}", query: request["query"])
+      when "search/index/endpoint#index"              then proxy(:get,  "/search", query: request["query"])
+      when "sessions/create/endpoint#create"          then proxy(:post, "/sessions", body: request["body"])
+      when "profiles/preferences/show/endpoint#show"  then proxy(:get,  "/profiles/#{safe_id(request)}/preferences")
+      when "healthz/show/endpoint#show"               then health(request)
       else
-        response(500, { error: "unknown Rails endpoint", controller: controller_path.to_s, action: action.to_s })
+        response(500, { error: "unknown endpoint", controller: controller_path.to_s, action: action.to_s })
       end
     end
 
@@ -39,7 +39,7 @@ module OresApp
     end
 
     def execution_mode
-      return "lambda" if defined?(ORES_GRAAL_RUNTIME) && ORES_GRAAL_RUNTIME
+      return "graal" if defined?(ORES_GRAAL_RUNTIME) && ORES_GRAAL_RUNTIME
 
       ENV.fetch("ORES_BUILD_TARGET", "rails")
     end

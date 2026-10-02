@@ -17,6 +17,7 @@ module OresApp
 
       route, path_params = match
       request["path_params"] = request.fetch("path_params", {}).merge(path_params)
+      request["route_id"] = route.route_id
       request["route_name"] = route.name
       request["route_group"] = route.group
       request["isolate_pool"] = route.pool

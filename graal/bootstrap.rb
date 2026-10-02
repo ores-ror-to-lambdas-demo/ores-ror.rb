@@ -1,30 +1,38 @@
 # frozen_string_literal: true
+# Appended to every generated Graal route/group unit.
+# common.rb and this unit source are each evaluated exactly once in a long-lived Context.
 
-ORES_GRAAL_RUNTIME = true unless defined?(ORES_GRAAL_RUNTIME)
-
-runtime_binding = binding
-fetch_host_binding = lambda do |name|
-  unless runtime_binding.local_variable_defined?(name)
-    raise "missing Graal host binding: #{name}"
-  end
-  runtime_binding.local_variable_get(name)
+if defined?(ores_gs_http) && !defined?(ORES_GS_HTTP)
+  ORES_GS_HTTP = ores_gs_http
 end
 
-ORES_GS_HTTP = fetch_host_binding.call(:gs_http) unless defined?(ORES_GS_HTTP)
+module OresGenerated
+  module GraalEntrypoint
+    module_function
 
-app_root = fetch_host_binding.call(:gs_app_root).to_s
-entrypoint = File.join(app_root, "generated", "lambda", "entrypoint.rb")
-raise "lambda runtime not generated; run ORES_BUILD_TARGET=lambda ruby bin/build-runtime" unless File.file?(entrypoint)
-
-require "json"
-require File.join(app_root, "lib", "ores_app", "thread_state_boundary")
-require entrypoint
-
-def ores_lambda_invoke(request_json)
-  OresApp::ThreadStateBoundary.call do
-    request = JSON.parse(request_json)
-    JSON.generate(OresGenerated::LambdaEntrypoint.call(request))
+    def call(request)
+      OresApp::ThreadStateBoundary.call do
+        OresApp::Dispatcher.call(request, routes: OresGenerated::Routes::TABLE, invoker: method(:invoke))
+      end
+    end
   end
 end
 
-method(:ores_lambda_invoke)
+def ores_graal_invoke(request_json)
+  raise "Graal host HTTP capability is unavailable" unless defined?(ORES_GS_HTTP)
+
+  request = JSON.parse(request_json.to_s)
+  JSON.generate(OresGenerated::GraalEntrypoint.call(request))
+end
+
+request_invoker = method(:ores_graal_invoke)
+
+->(*args) do
+  if args.length == 1 && args.first.is_a?(String)
+    request_invoker.call(args.first)
+  else
+    http_capability = args.fetch(0)
+    Object.const_set(:ORES_GS_HTTP, http_capability) unless defined?(ORES_GS_HTTP)
+    request_invoker
+  end
+end

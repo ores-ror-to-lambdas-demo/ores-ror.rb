@@ -5,8 +5,7 @@ require "uri"
 module OresApp
   module Routes
     Route = Struct.new(
-      :verb, :path, :name, :controller, :action, :middleware, :group, :pool,
-      :handler_path, :handler_constant, :view_logical_path, :view_files,
+      :verb, :path, :name, :controller, :action, :middleware, :group, :pool, :route_id,
       keyword_init: true
     )
 
