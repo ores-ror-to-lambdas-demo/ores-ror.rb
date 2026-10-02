@@ -28,12 +28,13 @@ jobs:
           ORES_BUILD_TARGET=rails RAILS_ENV=test bundle exec rails server -b 127.0.0.1 -p 3100 >rails-mri.log 2>&1 &
           echo $! > rails.pid
           for n in $(seq 1 45); do
-            if curl --fail --silent -H 'accept: application/json' -H 'x-request-id: rails-mri-smoke' http://127.0.0.1:3100/healthz >health.json; then break; fi
+            if curl --fail --silent -D health.headers -H 'accept: application/json' -H 'x-request-id: rails-mri-smoke' http://127.0.0.1:3100/healthz >health.json; then break; fi
             sleep 1
           done
           cat health.json
-          grep -q '"runtime":"ruby"' health.json
-          grep -q '"execution_mode":"rails"' health.json
+          cat health.headers
+          grep -qi '^x-ores-runtime: ruby' health.headers
+          grep -qi '^x-ores-execution-mode: rails' health.headers
           kill $(cat rails.pid)
       - if: failure()
         run: cat rails-mri.log || true
@@ -52,12 +53,13 @@ jobs:
           ORES_BUILD_TARGET=rails RAILS_ENV=test bundle exec rails server -b 127.0.0.1 -p 3101 >rails-truffle.log 2>&1 &
           echo $! > rails.pid
           for n in $(seq 1 60); do
-            if curl --fail --silent -H 'accept: application/json' -H 'x-request-id: rails-truffle-smoke' http://127.0.0.1:3101/healthz >health.json; then break; fi
+            if curl --fail --silent -D health.headers -H 'accept: application/json' -H 'x-request-id: rails-truffle-smoke' http://127.0.0.1:3101/healthz >health.json; then break; fi
             sleep 1
           done
           cat health.json
-          grep -q 'truffleruby' health.json
-          grep -q '"execution_mode":"rails"' health.json
+          cat health.headers
+          grep -qi '^x-ores-runtime: truffleruby' health.headers
+          grep -qi '^x-ores-execution-mode: rails' health.headers
           kill $(cat rails.pid)
       - if: failure()
         run: cat rails-truffle.log || true
