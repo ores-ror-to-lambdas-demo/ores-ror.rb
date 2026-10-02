@@ -246,6 +246,17 @@ module OresBuild
       fail! "Rails convention expected controller file #{relative(controller_file)}" unless controller_file.file?
       fail! "Rails convention expected #{controller}##{action} in #{relative(controller_file)}" unless source_defines_action?(controller_file, action)
 
+      group_name = group || top_group(controller)
+      model_token = model_token_for(controller)
+      model_class = camelize(model_token)
+      model_file = @root.join("app/models/#{model_token}.rb")
+      fail! "Rails convention expected model file #{relative(model_file)}" unless model_file.file?
+      fail! "Rails convention expected model class #{model_class} in #{relative(model_file)}" unless source_defines_class?(model_file, model_class)
+
+      view_files = Dir.glob(@root.join("app/views", controller, "#{action}.*").to_s).sort.map { |file| relative(Pathname(file)) }
+      fail! "Rails convention expected a view for #{controller}##{action}" if view_files.empty?
+      fail! "Rails-free runtime currently requires a .json.erb view for #{controller}##{action}" unless view_files.any? { |file| file.end_with?(".json.erb") }
+
       route = {
         verb: verb,
         path: normalize_path(path),
@@ -254,11 +265,13 @@ module OresBuild
         controller_class: controller_class_name(controller),
         action: action,
         controller_file: relative(controller_file),
+        model_class: model_class,
+        model_file: relative(model_file),
         view_logical_path: "#{controller}/#{action}",
-        view_files: Dir.glob(@root.join("app/views", controller, "#{action}.*").to_s).sort.map { |file| relative(Pathname(file)) },
+        view_files: view_files,
         middleware: ["request_id"],
-        group: group || top_group(controller),
-        pool: group || top_group(controller),
+        group: group_name,
+        pool: group_name,
         route_key: "#{verb} #{normalize_path(path)}"
       }
       route[:name] = generated_name(verb, route[:path], controller, action) if route[:name].nil? || route[:name].empty?
@@ -287,6 +300,10 @@ module OresBuild
         end
       end
       found
+    end
+
+    def source_defines_class?(file, class_name)
+      file.read.match?(/^\s*class\s+#{Regexp.escape(class_name)}\b/)
     end
 
     def validate_unique!
@@ -444,6 +461,13 @@ module OresBuild
       return value[0...-3] + "y" if value.end_with?("ies")
       return value[0...-1] if value.end_with?("s") && !value.end_with?("ss")
       value
+    end
+
+    def model_token_for(controller)
+      pieces = controller.to_s.split("/")
+      resource = pieces.last == "endpoint" ? pieces.first : pieces.last
+      singular = singularize(resource)
+      singular == resource ? "#{resource}_record" : singular
     end
 
     def pluralize(value)
