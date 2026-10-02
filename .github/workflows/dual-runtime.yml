@@ -73,7 +73,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ores-ror-to-lambdas-demo/ores-ror.infra
-          ref: refactor/runtime-assets-from-app
+          ref: main
           path: .ores-infra
       - name: Prove runtime folders moved out of app repo
         run: |
@@ -162,7 +162,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ores-ror-to-lambdas-demo/ores-ror.infra
-          ref: refactor/runtime-assets-from-app
+          ref: main
           path: .ores-infra
       - uses: ruby/setup-ruby@v1
         with:
@@ -268,7 +268,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ores-ror-to-lambdas-demo/ores-ror.infra
-          ref: refactor/runtime-assets-from-app
+          ref: main
           path: .ores-infra
       - name: Prove Lambda runtime is infra-owned
         run: |
@@ -315,7 +315,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ores-ror-to-lambdas-demo/ores-ror.infra
-          ref: refactor/runtime-assets-from-app
+          ref: main
           path: .ores-infra
       - uses: ruby/setup-ruby@v1
         with:
