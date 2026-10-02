@@ -4,9 +4,28 @@ module OresApp
   module JsonCodec
     class ParseError < StandardError; end
 
+    MAX_DOCUMENT_BYTES = 1024 * 1024
+    MAX_NESTING = 64
+
     module_function
 
     def generate(value)
+      encoded = encode_value(value, 0, {})
+      raise ArgumentError, "JSON document exceeds #{MAX_DOCUMENT_BYTES} bytes" if encoded.bytesize > MAX_DOCUMENT_BYTES
+
+      encoded
+    end
+
+    def parse(value)
+      source = normalize_input(value)
+      raise ParseError, "JSON document exceeds #{MAX_DOCUMENT_BYTES} bytes" if source.bytesize > MAX_DOCUMENT_BYTES
+
+      Parser.new(source).parse
+    end
+
+    def encode_value(value, depth, seen)
+      raise ArgumentError, "JSON nesting exceeds #{MAX_NESTING}" if depth > MAX_NESTING
+
       case value
       when nil
         "null"
@@ -24,22 +43,68 @@ module OresApp
         raise ArgumentError, "non-finite JSON number" unless value.finite?
         value.to_s
       when Array
-        "[" + value.map { |entry| generate(entry) }.join(",") + "]"
+        with_container(value, seen) do
+          "[" + value.map { |entry| encode_value(entry, depth + 1, seen) }.join(",") + "]"
+        end
       when Hash
-        "{" + value.map { |key, entry| "#{encode_string(key.to_s)}:#{generate(entry)}" }.join(",") + "}"
+        with_container(value, seen) do
+          keys = {}
+          body = value.map do |key, entry|
+            normalized_key = normalize_string(key.to_s)
+            raise ArgumentError, "duplicate JSON object key after string conversion: #{normalized_key.inspect}" if keys.key?(normalized_key)
+
+            keys[normalized_key] = true
+            "#{encode_string(normalized_key)}:#{encode_value(entry, depth + 1, seen)}"
+          end
+          "{" + body.join(",") + "}"
+        end
       else
-        return generate(value.to_h) if value.respond_to?(:to_h)
+        return encode_value(value.to_h, depth + 1, seen) if value.respond_to?(:to_h)
+
         raise ArgumentError, "unsupported JSON value: #{value.class}"
       end
     end
 
-    def parse(value)
-      Parser.new(value.to_s).parse
+    def with_container(value, seen)
+      identity = value.__id__
+      raise ArgumentError, "cyclic JSON value" if seen.key?(identity)
+
+      seen[identity] = true
+      yield
+    ensure
+      seen.delete(identity) if defined?(identity)
+    end
+
+    def normalize_input(value)
+      source = value.to_s.dup
+      unless source.encoding.ascii_compatible?
+        source = source.encode(Encoding::UTF_8)
+      end
+      source.force_encoding(Encoding::UTF_8)
+      raise ParseError, "JSON input is not valid UTF-8" unless source.valid_encoding?
+
+      source
+    rescue Encoding::InvalidByteSequenceError, Encoding::UndefinedConversionError
+      raise ParseError, "JSON input is not valid UTF-8"
+    end
+
+    def normalize_string(value)
+      string = value.to_s.dup
+      unless string.encoding.ascii_compatible?
+        string = string.encode(Encoding::UTF_8)
+      end
+      string.force_encoding(Encoding::UTF_8)
+      raise ArgumentError, "JSON string is not valid UTF-8" unless string.valid_encoding?
+
+      string
+    rescue Encoding::InvalidByteSequenceError, Encoding::UndefinedConversionError
+      raise ArgumentError, "JSON string is not valid UTF-8"
     end
 
     def encode_string(value)
+      string = normalize_string(value)
       out = +'"'
-      value.each_char do |char|
+      string.each_char do |char|
         out << case char
                when '"' then '\\"'
                when "\\" then "\\\\"
@@ -55,7 +120,8 @@ module OresApp
       end
       out << '"'
     end
-    private_class_method :encode_string
+
+    private_class_method :encode_value, :with_container, :normalize_input, :normalize_string, :encode_string
 
     class Parser
       def initialize(source)
@@ -65,7 +131,7 @@ module OresApp
 
       def parse
         skip_whitespace
-        result = parse_value
+        result = parse_value(0)
         skip_whitespace
         error!("trailing content") unless eof?
         result
@@ -73,14 +139,16 @@ module OresApp
 
       private
 
-      def parse_value
+      def parse_value(depth)
+        error!("JSON nesting exceeds #{MAX_NESTING}") if depth > MAX_NESTING
+
         skip_whitespace
         error!("unexpected end of input") if eof?
 
         case current
         when '"' then parse_string
-        when '{' then parse_object
-        when '[' then parse_array
+        when '{' then parse_object(depth)
+        when '[' then parse_array(depth)
         when 't' then parse_literal("true", true)
         when 'f' then parse_literal("false", false)
         when 'n' then parse_literal("null", nil)
@@ -90,7 +158,7 @@ module OresApp
         end
       end
 
-      def parse_object
+      def parse_object(depth)
         consume('{')
         object = {}
         skip_whitespace
@@ -100,9 +168,11 @@ module OresApp
           skip_whitespace
           error!("object key must be a string") unless current == '"'
           key = parse_string
+          error!("duplicate object key #{key.inspect}") if object.key?(key)
+
           skip_whitespace
           consume(':')
-          object[key] = parse_value
+          object[key] = parse_value(depth + 1)
           skip_whitespace
           break if current == '}' && consume('}')
           consume(',')
@@ -110,14 +180,14 @@ module OresApp
         object
       end
 
-      def parse_array
+      def parse_array(depth)
         consume('[')
         array = []
         skip_whitespace
         return consume(']') && array if current == ']'
 
         loop do
-          array << parse_value
+          array << parse_value(depth + 1)
           skip_whitespace
           break if current == ']' && consume(']')
           consume(',')
@@ -178,10 +248,13 @@ module OresApp
       def parse_number
         match = @source.match(/\G-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/, @index)
         error!("invalid number") unless match
+
         token = match[0]
         @index = match.end(0)
-        token.match?(/[.eE]/) ? Float(token) : Integer(token, 10)
-      rescue ArgumentError
+        number = token.match?(/[.eE]/) ? Float(token) : Integer(token, 10)
+        error!("non-finite JSON number") if number.is_a?(Float) && !number.finite?
+        number
+      rescue ArgumentError, FloatDomainError
         error!("invalid number")
       end
 
@@ -220,7 +293,7 @@ module OresApp
       end
 
       def error!(message)
-        raise ParseError, "#{message} at byte #{@index}"
+        raise ParseError, "#{message} at offset #{@index}"
       end
     end
   end
