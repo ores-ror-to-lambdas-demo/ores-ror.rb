@@ -43,7 +43,6 @@ RUN truffleruby bin/build-runtime \
     && test -f generated/lambda/manifest.json \
     && test -f generated/lambda/entrypoint.rb \
     && test -f app/controllers/users/show/handler.rb \
-    && git check-ignore -q app/controllers/users/show/handler.rb || true \
     && ! grep -R -E 'config/environment|Rails\.application' generated/lambda
 
 FROM truffleruby-base AS runtime
