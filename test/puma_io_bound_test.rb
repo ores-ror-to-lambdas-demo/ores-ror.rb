@@ -8,7 +8,7 @@ class PumaIoBoundTest < ActiveSupport::TestCase
 
   test "controller IO classification marks the current Puma processor" do
     marks = 0
-    request = FakeRequest.new("puma.mark_as_io_bound" => -> { marks += 1 })
+    request = FakeRequest.new({ "puma.mark_as_io_bound" => -> { marks += 1 } })
 
     assert_equal true, OresRails::PumaIoBound.mark!(request, enabled: true)
     assert_equal 1, marks
