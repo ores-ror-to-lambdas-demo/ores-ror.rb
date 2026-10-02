@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "digest"
+require "erb"
 require "fileutils"
 require "json"
 require "pathname"
@@ -72,6 +73,7 @@ APPLICATION_MODEL_FILE = "app/models/application_model.rb"
 APPLICATION_CONTROLLER_FILE = "app/controllers/application_controller.rb"
 ORES_ENDPOINT_CONTROLLER_FILE = "app/controllers/ores_endpoint_controller.rb"
 JSON_CODEC_FILE = "lib/ores_app/json_codec.rb"
+URL_CODEC_FILE = "lib/ores_app/url_codec.rb"
 CONTROLLER_RUNTIME_FILE = "lib/ores_app/controller_runtime.rb"
 VIEW_RUNTIME_FILE = "lib/ores_app/view_runtime.rb"
 ROUTE_HANDLER_MODE = ENV.fetch("ORES_ROUTE_HANDLER_MODE", "hybrid").downcase
@@ -129,14 +131,27 @@ def embedded_view_registration(routes)
   files = routes.flat_map { |route| route.fetch(:view_files) }.uniq
   entries = files.map do |relative|
     logical = relative.delete_prefix("app/views/")
-    source = File.read(File.join(ROOT, relative))
-    "      #{logical.inspect} => #{source.dump}"
+    compiled = ERB.new(File.read(File.join(ROOT, relative))).src
+    compiled_body = compiled.lines.map { |line| "          #{line}" }.join
+
+    <<~RUBY.rstrip
+      #{logical.inspect} => lambda do |locals|
+        scope = Object.new
+        locals.each do |name, value|
+          scope.define_singleton_method(name) { value }
+        end
+        scope.instance_exec do
+#{compiled_body}
+        end
+      end
+    RUBY
   end
 
+  indented = entries.map { |entry| entry.lines.map { |line| "      #{line}" }.join.rstrip }.join(",\n")
   <<~RUBY
-    # --- APP VIEWS (plain ERB, in-memory registry) ---
+    # --- APP VIEWS (ERB compiled at build time; no guest ERB compiler) ---
     OresApp::ViewRuntime.add({
-    #{entries.join(",\n")}
+#{indented}
     })
   RUBY
 end
@@ -150,12 +165,9 @@ def shared_runtime_source(mode)
     ORES_EXECUTION_MODE = #{mode.inspect} unless defined?(ORES_EXECUTION_MODE)
   RUBY
   source << "ORES_GRAAL_RUNTIME = true unless defined?(ORES_GRAAL_RUNTIME)\n" if mode == "graal"
-  source << <<~RUBY
-    require "erb"
-  RUBY
-
   [
     JSON_CODEC_FILE,
+    URL_CODEC_FILE,
     "lib/ores_app/routes.rb",
     "lib/ores_app/middleware.rb",
     "lib/ores_app/http_database.rb",
