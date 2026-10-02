@@ -11,7 +11,6 @@ module OresBuild
     HTTP_VERBS = %w[get post put patch delete options head].freeze
     RESOURCE_ACTIONS = %w[index create new show edit update destroy].freeze
     SINGLETON_ACTIONS = %w[new create show edit update destroy].freeze
-    ROUTE_ANNOTATION = /^\s*#\s*ores-route:\s*(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+(\S+)\s+action=([A-Za-z_][A-Za-z0-9_]*)\s*$/i.freeze
 
     Context = Struct.new(:path_prefix, :module_prefix, :as_prefix, :group, :parent_resource, keyword_init: true)
 
@@ -258,18 +257,6 @@ module OresBuild
       controller_file = confined_file!(controller_file, "controller source")
       fail! "Rails convention expected #{controller}##{action} in #{relative(controller_file)}" unless source_defines_action?(controller_file, action)
 
-      annotations = controller_route_annotations(controller_file)
-      normalized_path = normalize_path(path)
-      annotation = annotations.find do |entry|
-        entry.fetch(:verb) == verb &&
-          entry.fetch(:path) == normalized_path &&
-          entry.fetch(:action) == action.to_s
-      end
-      if annotations.any? && annotation.nil?
-        expected = "# ores-route: #{verb} #{normalized_path} action=#{action}"
-        fail! "controller route annotations in #{relative(controller_file)} do not declare #{expected}"
-      end
-
       group_name = group || top_group(controller)
       model_token = model_token_for(controller)
       model_class = camelize(model_token)
@@ -294,8 +281,6 @@ module OresBuild
         controller_class: controller_class_name(controller),
         action: action,
         controller_file: relative(controller_file),
-        controller_route_annotation: annotation && annotation.fetch(:declaration),
-        controller_route_annotated: !annotation.nil?,
         model_class: model_class,
         model_file: relative(model_file),
         view_logical_path: "#{controller}/#{action}",
@@ -316,22 +301,6 @@ module OresBuild
       endpoint = @root.join("app/controllers/#{controller}/endpoint_controller.rb")
       return endpoint if endpoint.file?
       direct
-    end
-
-    def controller_route_annotations(file)
-      read_confined!(file, "controller source").each_line.filter_map do |line|
-        next unless line.match?(/^\s*#\s*ores-route:/i)
-
-        match = ROUTE_ANNOTATION.match(line)
-        fail! "malformed ores-route annotation in #{relative(file)}: #{line.strip.inspect}" unless match
-
-        {
-          verb: match[1].upcase,
-          path: normalize_path(match[2]),
-          action: match[3],
-          declaration: "# ores-route: #{match[1].upcase} #{normalize_path(match[2])} action=#{match[3]}"
-        }
-      end
     end
 
     def source_defines_action?(file, action)
