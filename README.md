@@ -116,7 +116,7 @@ generated/
     └── groups/...
 ```
 
-They are generated and ignored by Git. Generated route units embed executable controller/model source and route ERB templates; the templates are installed into an in-memory Action View resolver, so Graal/Lambda can use native Action View rendering without reading application view files at request time.
+They are generated and ignored by Git. Generated route units embed executable controller/model source and route ERB templates. Graal/Lambda render those templates through a small in-memory plain-Ruby ERB runtime; they do not load Action View or read application view files at request time.
 
 ## Direct controller execution
 
@@ -132,7 +132,7 @@ The Graal/Lambda path is:
 event -> generated route match -> routes/**/handler.rb -> same real controller action -> same controller callbacks/middleware -> same model -> Action View -> captured Rack response
 ```
 
-Graal/Lambda do not boot `Rails.application`, the Rails router, initializers, or Puma. They intentionally load the standalone Action Pack and Action View components required to execute `Controller.action(name).call(rack_env)` and render the application's templates. Per-route ORES middleware is attached as an `around_action` on `OresEndpointController`, so a custom action does not need to call `dispatch_ores_endpoint` to receive the same middleware behavior.
+Graal/Lambda do not boot `Rails.application`, the Rails router, initializers, Puma, Action Controller, or Action View. The committed/generated handler invokes the same endpoint controller class directly. In Rails mode, `OresEndpointController` inherits `ApplicationController` and uses Rails callbacks/rendering; in Graal/Lambda mode the same endpoint controller source inherits a plain-Ruby compatibility base that supplies request/response/params plus in-memory ERB rendering. The same `OresApp::Middleware` chain wraps the action in both modes, so a custom action does not need to call `dispatch_ores_endpoint`.
 
 ## Cross-runtime proof
 
