@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+# ores-route: POST /orders/:id/cancel action=cancel
 
 module Orders
   module Cancel
