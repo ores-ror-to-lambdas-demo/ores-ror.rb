@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "digest"
+require "erb"
 require "fileutils"
 require "json"
 require "pathname"
@@ -103,6 +104,7 @@ def prepare_endpoint_handlers!(routes)
     route = rows.first
     path = File.join(ROOT, route.fetch(:handler_path))
     FileUtils.mkdir_p(File.dirname(path))
+
     modules = route.fetch(:handler_constant).split("::")
     body = <<~RUBY
       CONTROLLER_PATH = #{route.fetch(:controller).inspect}.freeze
@@ -116,6 +118,7 @@ def prepare_endpoint_handlers!(routes)
         OresApp::Handlers.call(CONTROLLER_PATH, ACTION, request)
       end
     RUBY
+
     indent = +""
     nested = +""
     modules.each do |name|
@@ -143,6 +146,90 @@ end
 def handler_source(route)
   flatten_ruby_source(File.join(ROOT, route.fetch(:handler_path)))
 end
+
+APPLICATION_MODEL_FILE = "app/models/application_model.rb"
+
+FORBIDDEN_HANDLER_SOURCE = {
+  /\brequire(?:_relative)?\b/ => "dynamic require",
+  /\b(?:File|Dir|IO)\s*\./ => "filesystem API",
+  /\b(?:Process\.|system\s*\(|exec\s*\(|spawn\s*\(|fork\b)/ => "process API",
+  /\b(?:Socket|TCPSocket|UDPSocket|UNIXSocket)\b/ => "raw socket API",
+  /\b(?:Fiddle|FFI)\b/ => "native FFI",
+  /\bThread\s*\.\s*(?:new|start|fork)\b/ => "guest-created thread"
+}.freeze
+
+def preferred_view_file(route)
+  route.fetch(:view_files).find { |file| file.end_with?(".json.erb") } ||
+    abort("route #{route.fetch(:name)} has no .json.erb view")
+end
+
+def validate_app_dependencies!(routes)
+  abort "missing #{APPLICATION_MODEL_FILE}" unless File.file?(File.join(ROOT, APPLICATION_MODEL_FILE))
+
+  executable_sources = [APPLICATION_MODEL_FILE] + routes.map { |route| route.fetch(:model_file) } +
+    routes.map { |route| preferred_view_file(route) }
+  executable_sources.uniq.each do |relative|
+    source = File.read(File.join(ROOT, relative))
+    FORBIDDEN_HANDLER_SOURCE.each do |pattern, label|
+      abort "MVC source #{relative} uses forbidden #{label}" if source.match?(pattern)
+    end
+  end
+end
+
+def compiled_erb_body(template)
+  ERB.new(template, trim_mode: "-").src.lines.reject { |line| line.start_with?("#coding:") }.join
+end
+
+def app_model_sources(routes)
+  files = [APPLICATION_MODEL_FILE] + routes.map { |route| route.fetch(:model_file) }
+  files.uniq.map do |relative|
+    <<~RUBY
+      # --- APP MODEL #{relative} ---
+      #{flatten_ruby_source(File.join(ROOT, relative))}
+    RUBY
+  end.join("\n")
+end
+
+def presentation_source(route)
+  controller_file = route.fetch(:controller_file)
+  model_file = route.fetch(:model_file)
+  view_file = preferred_view_file(route)
+  controller_source = File.read(File.join(ROOT, controller_file))
+  view_source = File.read(File.join(ROOT, view_file))
+  compiled_view = compiled_erb_body(view_source)
+  const = route_const(route)
+
+  <<~RUBY
+    # --- APP CONTROLLER #{controller_file} (packaged source; not executed in Rails-free runtime) ---
+    module OresGenerated
+      module AppSources
+        module #{const}
+          CONTROLLER_FILE = #{controller_file.inspect}.freeze
+          CONTROLLER_SOURCE = #{controller_source.dump}.freeze
+          MODEL_FILE = #{model_file.inspect}.freeze
+          VIEW_FILE = #{view_file.inspect}.freeze
+          VIEW_SOURCE = #{view_source.dump}.freeze
+        end
+      end
+
+      module Presenters
+        module #{const}
+          module_function
+
+          def call(response)
+            model = #{route.fetch(:model_class)}.new(response.fetch(:body))
+            response.merge(body: render_view(model))
+          end
+
+          def render_view(model)
+            #{compiled_view.lines.map { |line| "            #{line}" }.join}
+          end
+        end
+      end
+    end
+  RUBY
+end
+
 def route_row(route)
   "OresApp::Routes::Route.new(" \
     "verb: #{route.fetch(:verb).inspect}, " \
@@ -189,6 +276,8 @@ def write_lambda_route_handler(path, route)
     # Generated Rails endpoint sidecar: #{sidecar}
     require "ores_app/handlers"
 
+    #{app_model_sources([route])}
+    #{presentation_source(route)}
     #{sidecar_source}
 
     module OresGenerated
@@ -197,7 +286,8 @@ def write_lambda_route_handler(path, route)
           module_function
 
           def call(request)
-            ::#{route.fetch(:handler_constant)}.call(request)
+            response = ::#{route.fetch(:handler_constant)}.call(request)
+            OresGenerated::Presenters::#{const}.call(response)
           end
         end
       end
@@ -206,16 +296,17 @@ def write_lambda_route_handler(path, route)
 end
 def write_lambda_group_handler(path, group, routes)
   FileUtils.mkdir_p(File.dirname(path))
-  sidecars = routes.uniq { |route| route.fetch(:handler_path) }.map { |route| handler_source(route) }.join("\n")
+  route_requires = routes.map do |route|
+    relative = route_unit_relative(route)
+    %(require_relative "../../#{relative.delete_suffix(".rb")}")
+  end.join("\n    ")
   cases = routes.map do |route|
-    "when #{route_id(route).inspect} then ::#{route.fetch(:handler_constant)}.call(request)"
+    "when #{route_id(route).inspect} then OresGenerated::RouteHandlers::#{route_const(route)}.call(request)"
   end.join("\n            ")
   File.write(path, <<~RUBY)
     # frozen_string_literal: true
     # GENERATED FILE. DO NOT EDIT OR COMMIT.
-    require "ores_app/handlers"
-
-    #{sidecars}
+    #{route_requires}
 
     module OresGenerated
       module GroupHandlers
@@ -234,6 +325,7 @@ def write_lambda_group_handler(path, group, routes)
     end
   RUBY
 end
+
 def write_lambda_entrypoint(routes, granularity)
   route_requires = routes.map do |route|
     relative = route_unit_relative(route)
@@ -333,7 +425,7 @@ end
 
 def graal_unit_source(routes)
   cases = routes.map do |route|
-    "when #{route_id(route).inspect} then ::#{route.fetch(:handler_constant)}.call(request)"
+    "when #{route_id(route).inspect} then OresGenerated::Presenters::#{route_const(route)}.call(::#{route.fetch(:handler_constant)}.call(request))"
   end.join("\n          ")
 
   String.new(<<~RUBY)
@@ -367,7 +459,9 @@ def write_graal_unit(relative, routes)
   path = File.join(GRAAL_DIR, relative)
   FileUtils.mkdir_p(File.dirname(path))
   source = String.new("# frozen_string_literal: true\n# GENERATED FILE. DO NOT EDIT OR COMMIT.\n")
-  routes.uniq { |route| route.fetch(:handler_path) }.each do |route|
+  source << "\n#{app_model_sources(routes)}\n"
+  routes.each do |route|
+    source << "\n#{presentation_source(route)}\n"
     sidecar = route.fetch(:handler_path)
     source << "\n# --- GENERATED SIDECAR #{sidecar} ---\n"
     source << handler_source(route)
@@ -405,6 +499,7 @@ when "lambda"
   routes = compile_routes
   abort "no statically resolvable application routes found" if routes.empty?
   prepare_endpoint_handlers!(routes)
+  validate_app_dependencies!(routes)
   FileUtils.rm_rf(LAMBDA_DIR)
   FileUtils.mkdir_p(LAMBDA_DIR)
   write_generated_routes(File.join(LAMBDA_DIR, "routes.rb"), routes)
@@ -426,6 +521,11 @@ when "lambda"
     "route_source" => "config/routes.rb:ripper-static",
     "rails_route_authority" => "config/routes.rb",
     "route_handler_authority" => "generated app/controllers/**/handler.rb sidecars",
+    "mvc_source_root" => "app",
+    "application_model" => APPLICATION_MODEL_FILE,
+    "controller_packaging" => "source-provenance-only",
+    "model_runtime" => "embedded-executable",
+    "view_runtime" => "build-time-compiled-erb",
     "router_runtime" => "generated-rails-route-contract",
     "middleware_runtime" => "shared-ruby-no-rails-app",
     "handler_granularity" => granularity,
@@ -444,6 +544,7 @@ when "graal"
   routes = compile_routes
   abort "no statically resolvable application routes found" if routes.empty?
   prepare_endpoint_handlers!(routes)
+  validate_app_dependencies!(routes)
   FileUtils.rm_rf(GRAAL_DIR)
   write_graal_common
 
@@ -457,6 +558,7 @@ when "graal"
       "route_ids" => [route_id(route)],
       "group" => route.fetch(:group),
       "source_handler" => route.fetch(:handler_path),
+      "app_sources" => [route.fetch(:controller_file), route.fetch(:model_file), *route.fetch(:view_files)],
       "sources" => ["generated/graal/common.rb", "generated/graal/#{relative}"],
       "language_context" => "ruby",
       "context_count" => 1,
@@ -474,6 +576,7 @@ when "graal"
       "route_ids" => grouped.map { |route| route_id(route) },
       "group" => group,
       "source_handlers" => grouped.map { |route| route.fetch(:handler_path) },
+      "app_sources" => grouped.flat_map { |route| [route.fetch(:controller_file), route.fetch(:model_file), *route.fetch(:view_files)] }.uniq,
       "sources" => ["generated/graal/common.rb", "generated/graal/#{relative}"],
       "language_context" => "ruby",
       "context_count" => 1,
@@ -492,6 +595,11 @@ when "graal"
     "route_source" => "config/routes.rb:ripper-static",
     "rails_route_authority" => "config/routes.rb",
     "route_handler_authority" => "generated app/controllers/**/handler.rb sidecars",
+    "mvc_source_root" => "app",
+    "application_model" => APPLICATION_MODEL_FILE,
+    "controller_packaging" => "source-provenance-only",
+    "model_runtime" => "embedded-executable",
+    "view_runtime" => "build-time-compiled-erb",
     "router_runtime" => "generated-rails-route-contract",
     "middleware_runtime" => "shared-ruby-no-rails-app",
     "engine_scope" => "process-shared",
