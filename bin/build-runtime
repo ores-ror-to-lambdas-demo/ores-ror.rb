@@ -17,7 +17,7 @@ GRAAL_BOOTSTRAP = File.expand_path(
   ENV.fetch("ORES_GRAAL_BOOTSTRAP", File.join(INFRA_ROOT, "graal/bootstrap.rb")),
   ROOT
 )
-MAX_GRAAL_ADMITTED_IN_FLIGHT = 5
+GRAAL_CONTEXT_THREAD_POOL_SIZE = 5
 
 abort "Rails must not be loaded during Lambda/Graal generation" if defined?(Rails) && ENV.fetch("ORES_BUILD_TARGET", "rails") != "rails"
 
@@ -672,10 +672,11 @@ when "graal"
       "sources" => ["generated/graal/common.rb", "generated/graal/#{relative}"],
       "language_context" => "ruby",
       "context_count" => 1,
-      "guest_owner_threads" => 5,
-      "execution_concurrency" => 5,
+      "host_thread_pool_size" => GRAAL_CONTEXT_THREAD_POOL_SIZE,
+      "guest_owner_threads" => GRAAL_CONTEXT_THREAD_POOL_SIZE,
+      "execution_concurrency" => GRAAL_CONTEXT_THREAD_POOL_SIZE,
       "request_multiplexing" => true,
-      "admission_limit" => MAX_GRAAL_ADMITTED_IN_FLIGHT
+      "admission_limit" => GRAAL_CONTEXT_THREAD_POOL_SIZE
     }
   end
   routes.group_by { |route| route.fetch(:group) }.each do |group, grouped|
@@ -692,10 +693,11 @@ when "graal"
       "sources" => ["generated/graal/common.rb", "generated/graal/#{relative}"],
       "language_context" => "ruby",
       "context_count" => 1,
-      "guest_owner_threads" => 5,
-      "execution_concurrency" => 5,
+      "host_thread_pool_size" => GRAAL_CONTEXT_THREAD_POOL_SIZE,
+      "guest_owner_threads" => GRAAL_CONTEXT_THREAD_POOL_SIZE,
+      "execution_concurrency" => GRAAL_CONTEXT_THREAD_POOL_SIZE,
       "request_multiplexing" => true,
-      "admission_limit" => MAX_GRAAL_ADMITTED_IN_FLIGHT
+      "admission_limit" => GRAAL_CONTEXT_THREAD_POOL_SIZE
     }
   end
 
@@ -723,8 +725,9 @@ when "graal"
     "engine_scope" => "process-shared",
     "language_context" => "ruby",
     "contexts_per_isolate" => 1,
-    "guest_owner_threads_per_context" => 5,
-    "execution_concurrency_per_context" => 5,
+    "host_thread_pool_size_per_context" => GRAAL_CONTEXT_THREAD_POOL_SIZE,
+    "guest_owner_threads_per_context" => GRAAL_CONTEXT_THREAD_POOL_SIZE,
+    "execution_concurrency_per_context" => GRAAL_CONTEXT_THREAD_POOL_SIZE,
     "request_multiplexing" => true,
     "shared_source" => "generated/graal/common.rb",
     "source_memory" => "host-read-only-shareable",
@@ -733,7 +736,7 @@ when "graal"
     "supported_isolation_granularities" => %w[route group],
     "request_state" => "explicit-per-invocation",
     "thread_identity_is_request_identity" => false,
-    "max_admitted_in_flight_per_isolate" => MAX_GRAAL_ADMITTED_IN_FLIGHT,
+    "max_admitted_in_flight_per_isolate" => GRAAL_CONTEXT_THREAD_POOL_SIZE,
     "max_isolate_age_seconds" => 1800,
     "idle_retire_seconds" => 300,
     "hard_cancel_scope" => "isolate",
