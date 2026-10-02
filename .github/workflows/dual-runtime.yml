@@ -100,6 +100,29 @@ jobs:
           ruby script/static-route-compiler-smoke.rb
           ruby -e 'abort "Rails unexpectedly loaded" if defined?(Rails)'
 
+      - name: Reject symlinked executable sources and unowned generated output
+        run: |
+          set -euo pipefail
+
+          cp app/models/user.rb "$RUNNER_TEMP/user.rb"
+          rm app/models/user.rb
+          ln -s "$RUNNER_TEMP/user.rb" app/models/user.rb
+          if ORES_BUILD_TARGET=graal ruby bin/build-runtime; then
+            echo "symlinked model source unexpectedly passed" >&2
+            exit 1
+          fi
+          rm app/models/user.rb
+          cp "$RUNNER_TEMP/user.rb" app/models/user.rb
+
+          out="$RUNNER_TEMP/unowned-output"
+          mkdir -p "$out/graal"
+          printf '%s\n' "do not delete" > "$out/graal/unrelated.txt"
+          if ORES_BUILD_TARGET=graal ORES_BUILD_OUTPUT="$out" ruby bin/build-runtime; then
+            echo "unowned generated output unexpectedly replaced" >&2
+            exit 1
+          fi
+          grep -qx 'do not delete' "$out/graal/unrelated.txt"
+
       - name: Generate route-granularity Lambda artifacts without Rails
         env:
           ORES_BUILD_TARGET: lambda
