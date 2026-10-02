@@ -4,7 +4,7 @@ require "test_helper"
 
 class RuntimeContractTest < ActionDispatch::IntegrationTest
   test "health runs through a conventional Rails controller action" do
-    get "/healthz", headers: { "x-request-id" => "contract-health" }
+    get "/healthz", headers: { "accept" => "application/json", "x-request-id" => "contract-health" }
     assert response.successful?, response.body
     payload = JSON.parse(response.body)
     assert_equal true, payload.fetch("ok")

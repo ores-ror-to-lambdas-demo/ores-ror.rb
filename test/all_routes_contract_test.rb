@@ -2,6 +2,7 @@
 
 require "test_helper"
 require "cgi"
+require "minitest/mock"
 require Rails.root.join("lib/ores_build/static_routes")
 require Rails.root.join("test/support/route_contract")
 
