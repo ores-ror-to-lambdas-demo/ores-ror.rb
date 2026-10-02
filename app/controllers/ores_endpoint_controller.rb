@@ -55,9 +55,12 @@ class OresEndpointController < ApplicationController
   end
 
   def parsed_body
-    return nil if request.raw_post.to_s.empty?
-    return request.request_parameters if request.content_type.to_s.include?("json")
+    raw = request.raw_post.to_s
+    return nil if raw.empty?
+    return JSON.parse(raw) if request.content_type.to_s.include?("json")
 
-    request.raw_post
+    raw
+  rescue JSON::ParserError => error
+    raise ActionController::BadRequest, "invalid JSON body: #{error.message}"
   end
 end
