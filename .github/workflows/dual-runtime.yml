@@ -66,8 +66,21 @@ jobs:
 
   rails-free-codegen:
     runs-on: ubuntu-latest
+    env:
+      ORES_INFRA_ROOT: ${{ github.workspace }}/.ores-infra
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ores-ror-to-lambdas-demo/ores-ror.infra
+          ref: main
+          path: .ores-infra
+      - name: Prove runtime folders moved out of app repo
+        run: |
+          test ! -e graal
+          test ! -e aws-lambda
+          test -f .ores-infra/graal/bootstrap.rb
+          test -f .ores-infra/aws-lambda/Dockerfile
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.4'
@@ -121,6 +134,8 @@ jobs:
           grep -Fq '"language_context": "ruby"' generated/graal/manifest.json
           grep -Fq '"request_multiplexing": true' generated/graal/manifest.json
           grep -Fq '"route_handler_authority": "routes/**/handler.rb"' generated/graal/manifest.json
+          grep -Fq '"runtime_adapter_repository": "ores-ror-to-lambdas-demo/ores-ror.infra"' generated/graal/manifest.json
+          grep -Fq '# --- infra graal/bootstrap.rb ---' 'generated/graal/routes/users/[id]/_get/handler.rb'
           ruby -rjson -e 'm=JSON.parse(File.read("generated/graal/manifest.json")); by=m.fetch("routes").to_h{|r|[r.fetch("name"),r.fetch("middleware")]}; raise unless by.fetch("user")==%w[request_id users_show_header]; raise unless by.fetch("cancel_order")==%w[request_id order_cancel_header]; raise unless by.fetch("search")==%w[request_id search_header]'
           grep -Fq '"engine_scope": "process-shared"' generated/graal/manifest.json
           test -f 'routes/users/[id]/handler.rb'
@@ -141,8 +156,14 @@ jobs:
     env:
       BUNDLE_WITHOUT: rails:test
       ORES_BUILD_TARGET: graal
+      ORES_INFRA_ROOT: ${{ github.workspace }}/.ores-infra
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ores-ror-to-lambdas-demo/ores-ror.infra
+          ref: main
+          path: .ores-infra
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: truffleruby+graalvm-34.0.1
@@ -244,8 +265,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ores-ror-to-lambdas-demo/ores-ror.infra
+          ref: main
+          path: .ores-infra
+      - name: Prove Lambda runtime is infra-owned
+        run: |
+          test ! -e aws-lambda
+          test -f .ores-infra/aws-lambda/Dockerfile
+          test -f .ores-infra/aws-lambda/bootstrap
       - name: Build Lambda image without Rails bundle
-        run: docker build --platform linux/amd64 -f aws-lambda/Dockerfile -t ores-ror-truffleruby-lambda:test .
+        run: |
+          docker build \
+            --platform linux/amd64 \
+            --build-context ores_infra=.ores-infra \
+            -f .ores-infra/aws-lambda/Dockerfile \
+            -t ores-ror-truffleruby-lambda:test \
+            .
       - name: Verify Rails gem is absent
         run: docker run --rm --entrypoint truffleruby ores-ror-truffleruby-lambda:test -e 'abort "rails gem present" unless Gem::Specification.find_all_by_name("rails").empty?'
       - name: Install AWS Lambda Runtime Interface Emulator
@@ -256,7 +293,7 @@ jobs:
         run: |
           docker run --rm -d --name ores-ror-lambda -p 9000:8080 -v "$PWD/aws-lambda-rie:/aws-lambda-rie:ro" --entrypoint /aws-lambda-rie ores-ror-truffleruby-lambda:test /var/runtime/bootstrap
           for n in $(seq 1 60); do
-            if curl --fail --silent -H 'content-type: application/json' -d @aws-lambda/event-v2.json http://127.0.0.1:9000/2015-03-31/functions/function/invocations >lambda-response.json; then break; fi
+            if curl --fail --silent -H 'content-type: application/json' -d @.ores-infra/aws-lambda/event-v2.json http://127.0.0.1:9000/2015-03-31/functions/function/invocations >lambda-response.json; then break; fi
             sleep 1
           done
           cat lambda-response.json
@@ -271,8 +308,15 @@ jobs:
 
   cross-runtime-all-routes:
     runs-on: ubuntu-latest
+    env:
+      ORES_INFRA_ROOT: ${{ github.workspace }}/.ores-infra
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ores-ror-to-lambdas-demo/ores-ror.infra
+          ref: main
+          path: .ores-infra
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: truffleruby+graalvm-34.0.1

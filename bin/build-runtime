@@ -12,6 +12,11 @@ ROOT = File.expand_path("..", __dir__)
 OUTPUT_ROOT = File.expand_path(ENV.fetch("ORES_BUILD_OUTPUT", "../generated"), __dir__)
 LAMBDA_DIR = File.join(OUTPUT_ROOT, "lambda")
 GRAAL_DIR = File.join(OUTPUT_ROOT, "graal")
+INFRA_ROOT = File.expand_path(ENV.fetch("ORES_INFRA_ROOT", "../ores-ror.infra"), ROOT)
+GRAAL_BOOTSTRAP = File.expand_path(
+  ENV.fetch("ORES_GRAAL_BOOTSTRAP", File.join(INFRA_ROOT, "graal/bootstrap.rb")),
+  ROOT
+)
 MAX_GRAAL_THREADS = 5
 
 abort "Rails must not be loaded during Lambda/Graal generation" if defined?(Rails) && ENV.fetch("ORES_BUILD_TARGET", "rails") != "rails"
@@ -436,8 +441,8 @@ def write_graal_unit(relative, routes)
     source << "\n"
   end
   source << graal_unit_source(routes)
-  source << "\n# --- graal/bootstrap.rb ---\n"
-  source << flatten_ruby_source(File.join(ROOT, "graal/bootstrap.rb"))
+  source << "\n# --- infra graal/bootstrap.rb ---\n"
+  source << flatten_ruby_source(GRAAL_BOOTSTRAP)
   source << "\n"
   File.write(path, source)
   path
@@ -510,6 +515,7 @@ when "lambda"
   warn "build target=lambda: compiled #{routes.length} Rails-authored routes without loading Rails; granularity=#{granularity}"
 when "graal"
   abort "Rails must not be loaded during Graal generation" if defined?(Rails)
+  abort "missing infra-owned Graal bootstrap: #{GRAAL_BOOTSTRAP}" unless File.file?(GRAAL_BOOTSTRAP)
   routes = compile_routes
   abort "no statically resolvable application routes found" if routes.empty?
   validate_physical_handlers!(routes)
@@ -571,6 +577,8 @@ when "graal"
     "view_runtime" => "build-time-compiled-erb",
     "router_runtime" => "generated-rails-route-contract",
     "middleware_runtime" => "shared-ruby-no-rails-app",
+    "runtime_adapter_repository" => "ores-ror-to-lambdas-demo/ores-ror.infra",
+    "runtime_adapter_source" => "graal/bootstrap.rb",
     "engine_scope" => "process-shared",
     "language_context" => "ruby",
     "contexts_per_isolate" => 1,
