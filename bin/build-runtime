@@ -133,7 +133,7 @@ def embedded_view_registration(routes)
   end
 
   <<~RUBY
-    # --- APP VIEWS (native Action View, in-memory resolver) ---
+    # --- APP VIEWS (plain ERB, in-memory registry) ---
     OresApp::ViewRuntime.add({
     #{entries.join(",\n")}
     })
@@ -147,7 +147,6 @@ def shared_runtime_source(mode)
     # Shared controller/model/runtime code for #{mode} execution.
 
     ORES_EXECUTION_MODE = #{mode.inspect} unless defined?(ORES_EXECUTION_MODE)
-    ORES_EMBEDDED_ACTION_VIEW = true unless defined?(ORES_EMBEDDED_ACTION_VIEW)
   RUBY
   source << "ORES_GRAAL_RUNTIME = true unless defined?(ORES_GRAAL_RUNTIME)\n" if mode == "graal"
   source << <<~RUBY
