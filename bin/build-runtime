@@ -72,7 +72,7 @@ APPLICATION_MODEL_FILE = "app/models/application_model.rb"
 APPLICATION_CONTROLLER_FILE = "app/controllers/application_controller.rb"
 ORES_ENDPOINT_CONTROLLER_FILE = "app/controllers/ores_endpoint_controller.rb"
 CONTROLLER_RUNTIME_FILE = "lib/ores_app/controller_runtime.rb"
-EMBEDDED_VIEWS_FILE = "lib/ores_app/embedded_views.rb"
+VIEW_RUNTIME_FILE = "lib/ores_app/view_runtime.rb"
 ROUTE_HANDLER_MODE = ENV.fetch("ORES_ROUTE_HANDLER_MODE", "hybrid").downcase
 VALID_ROUTE_HANDLER_MODES = %w[hybrid manual annotation].freeze
 abort "ORES_ROUTE_HANDLER_MODE must be hybrid, manual, or annotation" unless VALID_ROUTE_HANDLER_MODES.include?(ROUTE_HANDLER_MODE)
@@ -134,7 +134,7 @@ def embedded_view_registration(routes)
 
   <<~RUBY
     # --- APP VIEWS (native Action View, in-memory resolver) ---
-    OresApp::EmbeddedViews.add({
+    OresApp::ViewRuntime.add({
     #{entries.join(",\n")}
     })
   RUBY
@@ -151,10 +151,8 @@ def shared_runtime_source(mode)
   RUBY
   source << "ORES_GRAAL_RUNTIME = true unless defined?(ORES_GRAAL_RUNTIME)\n" if mode == "graal"
   source << <<~RUBY
-    require "action_controller"
-    require "action_view"
-    require "action_dispatch/request/utils"
     require "json"
+    require "erb"
   RUBY
 
   [
@@ -165,9 +163,8 @@ def shared_runtime_source(mode)
     "lib/ores_app/thread_state_boundary.rb",
     "lib/ores_app/dispatcher.rb",
     CONTROLLER_RUNTIME_FILE,
-    EMBEDDED_VIEWS_FILE,
+    VIEW_RUNTIME_FILE,
     APPLICATION_MODEL_FILE,
-    APPLICATION_CONTROLLER_FILE,
     ORES_ENDPOINT_CONTROLLER_FILE
   ].each do |relative|
     source << "\n# --- #{relative} ---\n"
@@ -551,11 +548,11 @@ when "lambda"
     "application_model" => APPLICATION_MODEL_FILE,
     "controller_packaging" => "direct-executable-source",
     "model_runtime" => "embedded-executable-source",
-    "view_runtime" => "actionview-native-in-memory",
+    "view_runtime" => "plain-erb-in-memory",
     "router_runtime" => "generated-rails-route-contract",
     "middleware_runtime" => "controller-lifecycle-shared-ruby",
-    "controller_invocation" => "ActionController.action(name).call(rack_env)",
-    "framework_components" => %w[actionpack actionview],
+    "controller_invocation" => "plain-ruby-controller-instance#action",
+    "framework_components" => [],
     "handler_granularity" => granularity,
     "routes" => routes.map do |route|
       mapping = route_handler_mapping(route)
@@ -634,13 +631,13 @@ when "graal"
     "application_model" => APPLICATION_MODEL_FILE,
     "controller_packaging" => "direct-executable-source",
     "model_runtime" => "embedded-executable-source",
-    "view_runtime" => "actionview-native-in-memory",
+    "view_runtime" => "plain-erb-in-memory",
     "router_runtime" => "generated-rails-route-contract",
     "middleware_runtime" => "controller-lifecycle-shared-ruby",
     "runtime_adapter_repository" => "ores-ror-to-lambdas-demo/ores-ror.infra",
     "runtime_adapter_source" => "graal/bootstrap.rb",
-    "controller_invocation" => "ActionController.action(name).call(rack_env)",
-    "framework_components" => %w[actionpack actionview],
+    "controller_invocation" => "plain-ruby-controller-instance#action",
+    "framework_components" => [],
     "engine_scope" => "process-shared",
     "language_context" => "ruby",
     "contexts_per_isolate" => 1,
