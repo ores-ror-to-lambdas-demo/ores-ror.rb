@@ -100,6 +100,41 @@ jobs:
           ruby script/static-route-compiler-smoke.rb
           ruby -e 'abort "Rails unexpectedly loaded" if defined?(Rails)'
 
+      - name: Reject symlinked sources and unsafe generated-output roots
+        run: |
+          set -euo pipefail
+
+          cp app/models/user.rb "$RUNNER_TEMP/user.rb"
+          rm app/models/user.rb
+          ln -s "$RUNNER_TEMP/user.rb" app/models/user.rb
+          if ORES_BUILD_TARGET=graal ruby bin/build-runtime; then
+            echo "symlinked model source unexpectedly passed" >&2
+            exit 1
+          fi
+          rm app/models/user.rb
+          cp "$RUNNER_TEMP/user.rb" app/models/user.rb
+
+          out="$RUNNER_TEMP/unowned-output"
+          mkdir -p "$out/graal"
+          printf '%s\n' "do not delete" > "$out/graal/unrelated.txt"
+          if ORES_BUILD_TARGET=graal ORES_BUILD_OUTPUT="$out" ruby bin/build-runtime; then
+            echo "unowned generated output unexpectedly replaced" >&2
+            exit 1
+          fi
+          grep -qx 'do not delete' "$out/graal/unrelated.txt"
+
+          mkdir -p "$RUNNER_TEMP/real-output"
+          ln -s "$RUNNER_TEMP/real-output" "$RUNNER_TEMP/symlink-output"
+          if ORES_BUILD_TARGET=graal ORES_BUILD_OUTPUT="$RUNNER_TEMP/symlink-output" ruby bin/build-runtime; then
+            echo "symlinked output root unexpectedly passed" >&2
+            exit 1
+          fi
+
+          if ORES_BUILD_TARGET=graal ORES_BUILD_OUTPUT="$PWD" ruby bin/build-runtime; then
+            echo "application-root output unexpectedly passed" >&2
+            exit 1
+          fi
+
       - name: Generate route-granularity Lambda artifacts without Rails
         env:
           ORES_BUILD_TARGET: lambda
@@ -119,7 +154,7 @@ jobs:
           grep -Fq 'app/controllers/users/show/endpoint_controller' routes/users/'[id]'/handler.rb
           grep -Fq 'Users::Show::EndpointController.call_ores_action("show", request)' routes/users/'[id]'/handler.rb
           grep -Fq '"controller_packaging": "direct-executable-source"' generated/lambda/manifest.json
-          grep -Fq '"view_runtime": "plain-erb-in-memory"' generated/lambda/manifest.json
+          grep -Fq '"view_runtime": "build-time-compiled-erb-renderers"' generated/lambda/manifest.json
           ! grep -R -E 'config/environment|Rails\.application|ActionController|ActionView' generated/lambda
           ! grep -R -F 'require "json"' generated/lambda
           ! grep -R -F 'require "erb"' generated/lambda
@@ -177,7 +212,7 @@ jobs:
           grep -Fq 'OresApp::ViewRuntime.add({' 'generated/graal/routes/users/[id]/_get/handler.rb'
           grep -Fq 'Users::Show::EndpointController.call_ores_action("show", request)' 'routes/users/[id]/handler.rb'
           grep -Fq '"controller_packaging": "direct-executable-source"' generated/graal/manifest.json
-          grep -Fq '"view_runtime": "plain-erb-in-memory"' generated/graal/manifest.json
+          grep -Fq '"view_runtime": "build-time-compiled-erb-renderers"' generated/graal/manifest.json
           grep -Fq '"app/models/order.rb"' generated/graal/manifest.json
           grep -Fq '"app/views/orders/show/endpoint/show.json.erb"' generated/graal/manifest.json
           grep -Fq '"source_memory": "host-read-only-shareable"' generated/graal/manifest.json
