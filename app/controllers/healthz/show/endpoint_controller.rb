@@ -2,7 +2,7 @@
 
 module Healthz
   module Show
-    class HealthzController < ApplicationController
+    class EndpointController < OresEndpointController
       def show
         dispatch_ores_endpoint
       end

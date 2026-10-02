@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
-module Users
+module Accounts
   module Show
-    class UsersController < ApplicationController
+    class EndpointController < OresEndpointController
       def show
         dispatch_ores_endpoint
       end

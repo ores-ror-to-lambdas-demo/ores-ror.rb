@@ -10,23 +10,38 @@ module OresApp
   module Dispatcher
     module_function
 
-    def call(raw_request, invoker: nil)
+    def call(raw_request, routes:, invoker:)
       request = normalize_request(raw_request)
-      match = Routes.match(request.fetch("method"), request.fetch("path"))
+      match = Routes.match(routes, request.fetch("method"), request.fetch("path"))
       return serialize_response(status: 404, headers: {}, body: { error: "route not found" }) unless match
 
       route, path_params = match
-      request["path_params"] = path_params
+      request["path_params"] = request.fetch("path_params", {}).merge(path_params)
+      request["route_id"] = route.route_id
       request["route_name"] = route.name
       request["route_group"] = route.group
       request["isolate_pool"] = route.pool
+      request["controller"] = route.controller
+      request["action"] = route.action
 
-      result = Middleware.call(route.middleware, request) do
-        if invoker
-          invoker.call(route, request)
-        else
-          Handlers.call(route.handler, request)
-        end
+      result = Middleware.call(route.middleware || Routes::DEFAULT_MIDDLEWARE, request) do
+        invoker.call(route, request)
+      end
+
+      serialize_response(result)
+    rescue ArgumentError, KeyError => error
+      serialize_response(status: 400, headers: {}, body: { error: error.message })
+    rescue HttpDatabase::Error => error
+      serialize_response(status: 502, headers: {}, body: { error: error.message })
+    end
+
+    def call_direct(raw_request, controller_path:, action:, middleware: Routes::DEFAULT_MIDDLEWARE)
+      request = normalize_request(raw_request)
+      request["controller"] = controller_path.to_s
+      request["action"] = action.to_s
+
+      result = Middleware.call(middleware, request) do
+        Handlers.call(controller_path, action, request)
       end
 
       serialize_response(result)
@@ -49,7 +64,8 @@ module OresApp
         "path" => request.fetch("path", "/").to_s,
         "headers" => headers,
         "query" => query,
-        "body" => normalize_body(request["body"], content_type)
+        "body" => normalize_body(request["body"], content_type),
+        "path_params" => stringify_keys(request["path_params"] || {})
       }
     end
 

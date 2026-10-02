@@ -2,7 +2,7 @@
 
 module Orders
   module Cancel
-    class OrdersController < ApplicationController
+    class EndpointController < OresEndpointController
       def cancel
         dispatch_ores_endpoint
       end

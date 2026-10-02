@@ -1,38 +1,45 @@
 require "test_helper"
 
 class RoutesTest < ActionDispatch::IntegrationTest
-  test "demo route surface is present" do
-    expected = %w[user cart checkout_session product order cancel_order account inventory recommendations search sessions preferences health]
-    names = Rails.application.routes.routes.filter_map { |route| route.name&.to_s }
-    assert_empty(expected - names)
-  end
-
-  test "every endpoint owns a conventional Rails controller folder and generated handler location" do
+  test "Rails routes are the only endpoint routing source of truth" do
     expected = {
-      "/users/:id" => ["app/controllers/users/show/users_controller.rb", "app/controllers/users/show/handler.rb"],
-      "/carts/:id" => ["app/controllers/carts/show/carts_controller.rb", "app/controllers/carts/show/handler.rb"],
-      "/checkout-sessions/:id" => ["app/controllers/checkout_sessions/create/checkout_sessions_controller.rb", "app/controllers/checkout_sessions/create/handler.rb"],
-      "/products/:id" => ["app/controllers/products/show/products_controller.rb", "app/controllers/products/show/handler.rb"],
-      "/orders/:id" => ["app/controllers/orders/show/orders_controller.rb", "app/controllers/orders/show/handler.rb"],
-      "/orders/:id/cancel" => ["app/controllers/orders/cancel/orders_controller.rb", "app/controllers/orders/cancel/handler.rb"],
-      "/accounts/:id" => ["app/controllers/accounts/show/accounts_controller.rb", "app/controllers/accounts/show/handler.rb"],
-      "/inventory/:id" => ["app/controllers/inventory/show/inventory_controller.rb", "app/controllers/inventory/show/handler.rb"],
-      "/recommendations/:id" => ["app/controllers/recommendations/show/recommendations_controller.rb", "app/controllers/recommendations/show/handler.rb"],
-      "/search" => ["app/controllers/search/index/search_controller.rb", "app/controllers/search/index/handler.rb"],
-      "/sessions" => ["app/controllers/sessions/create/sessions_controller.rb", "app/controllers/sessions/create/handler.rb"],
-      "/profiles/:id/preferences" => ["app/controllers/profiles/preferences/profiles_controller.rb", "app/controllers/profiles/preferences/handler.rb"],
-      "/healthz" => ["app/controllers/healthz/show/healthz_controller.rb", "app/controllers/healthz/show/handler.rb"]
+      "user" => ["users/show/endpoint", "show"],
+      "cart" => ["carts/show/endpoint", "show"],
+      "checkout_session" => ["checkout_sessions/create/endpoint", "create"],
+      "product" => ["products/show/endpoint", "show"],
+      "order" => ["orders/show/endpoint", "show"],
+      "cancel_order" => ["orders/cancel/endpoint", "cancel"],
+      "account" => ["accounts/show/endpoint", "show"],
+      "inventory" => ["inventory/show/endpoint", "show"],
+      "recommendations" => ["recommendations/show/endpoint", "show"],
+      "search" => ["search/index/endpoint", "index"],
+      "create_session" => ["sessions/create/endpoint", "create"],
+      "preferences" => ["profiles/preferences/show/endpoint", "show"],
+      "health" => ["healthz/show/endpoint", "show"]
     }
 
-    actual = OresApp::Routes::TABLE.to_h do |route|
-      [route.path, [OresApp::Routes.controller_relative_path(route), OresApp::Routes.handler_relative_path(route)]]
-    end
-    assert_equal expected, actual
+    actual = Rails.application.routes.routes.each_with_object({}) do |route, out|
+      next unless route.name && expected.key?(route.name.to_s)
 
-    OresApp::Routes::TABLE.each do |route|
-      assert File.file?(OresApp::Routes.controller_path(route)), "missing #{OresApp::Routes.controller_relative_path(route)}"
-      refute File.file?(OresApp::Routes.handler_path(route)), "generated handler must not exist in a clean Rails checkout"
-      assert_equal File.dirname(OresApp::Routes.controller_relative_path(route)), File.dirname(OresApp::Routes.handler_relative_path(route))
+      out[route.name.to_s] = [route.defaults[:controller], route.defaults[:action]]
+    end
+
+    assert_equal expected, actual
+  end
+
+  test "each endpoint action is a normal Rails method under app/controllers" do
+    Rails.application.eager_load!
+
+    Rails.application.routes.routes.each do |route|
+      next unless route.name
+
+      controller = route.defaults[:controller].to_s
+      action = route.defaults[:action].to_s
+      next if controller.empty? || action.empty?
+
+      klass = "#{controller.camelize}Controller".constantize
+      source = klass.instance_method(action).source_location&.first
+      assert source&.include?("/app/controllers/"), "#{controller}##{action} is not backed by app/controllers"
     end
   end
 end

@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
-module Inventory
+module Orders
   module Show
-    class InventoryController < ApplicationController
+    class EndpointController < OresEndpointController
       def show
         dispatch_ores_endpoint
       end

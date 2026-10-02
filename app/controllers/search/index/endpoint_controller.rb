@@ -2,7 +2,7 @@
 
 module Search
   module Index
-    class SearchController < ApplicationController
+    class EndpointController < OresEndpointController
       def index
         dispatch_ores_endpoint
       end

@@ -2,7 +2,7 @@
 
 module Sessions
   module Create
-    class SessionsController < ApplicationController
+    class EndpointController < OresEndpointController
       def create
         dispatch_ores_endpoint
       end

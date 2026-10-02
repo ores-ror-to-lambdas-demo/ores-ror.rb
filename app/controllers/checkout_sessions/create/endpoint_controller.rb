@@ -2,7 +2,7 @@
 
 module CheckoutSessions
   module Create
-    class CheckoutSessionsController < ApplicationController
+    class EndpointController < OresEndpointController
       def create
         dispatch_ores_endpoint
       end
