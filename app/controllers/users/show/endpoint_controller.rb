@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+# ores-route: GET /users/:id action=show
 
 module Users
   module Show
