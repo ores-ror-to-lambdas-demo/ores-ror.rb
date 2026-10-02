@@ -208,12 +208,14 @@ jobs:
           test -f generated/graal/routes/users/'[id]'/_get/handler.rb
           test -f generated/graal/groups/orders/handler.rb
           grep -Fq '"context_model": "one-long-lived-context-per-route-or-group-isolate"' generated/graal/manifest.json
-          grep -Fq '"schema": "ores-graal-ruby-manifest/v4"' generated/graal/manifest.json
+          grep -Fq '"schema": "ores-graal-ruby-manifest/v5"' generated/graal/manifest.json
           grep -Fq '"max_admitted_in_flight_per_isolate": 5' generated/graal/manifest.json
           grep -Fq '"contexts_per_isolate": 1' generated/graal/manifest.json
-          grep -Fq '"host_thread_pool_size_per_context": 5' generated/graal/manifest.json
-          grep -Fq '"guest_owner_threads_per_context": 5' generated/graal/manifest.json
-          grep -Fq '"execution_concurrency_per_context": 5' generated/graal/manifest.json
+          grep -Fq '"host_thread_pool_scope": "process-shared"' generated/graal/manifest.json
+          grep -Fq '"host_thread_pool_size_source": "infra-runtime-config"' generated/graal/manifest.json
+          grep -Fq '"host_threads_reused_across_isolates": true' generated/graal/manifest.json
+          grep -Fq '"host_thread_affinity": "none"' generated/graal/manifest.json
+          grep -Fq '"max_execution_concurrency_per_isolate": 5' generated/graal/manifest.json
           grep -Fq '"language_context": "ruby"' generated/graal/manifest.json
           grep -Fq '"request_multiplexing": true' generated/graal/manifest.json
           grep -Fq '"route_handler_authority": "generated app/controllers/**/handler.rb sidecars"' generated/graal/manifest.json
@@ -240,7 +242,7 @@ jobs:
           ! grep -R -F 'require "json"' generated/graal
           ! grep -R -F 'require "erb"' generated/graal
           ! grep -R -F 'ERB.new' generated/graal
-          ruby -rjson -e 'm=JSON.parse(File.read("generated/graal/manifest.json")); r=m["routes"].size; units=m["isolate_units"]; raise unless units.count{|u|u["kind"]=="route"}==r; raise unless units.any?{|u|u["kind"]=="group" && u["group"]=="orders"}; raise unless units.all?{|u|u["context_count"]==1 && u["host_thread_pool_size"]==5 && u["guest_owner_threads"]==5 && u["execution_concurrency"]==5 && u["admission_limit"]==5 && u["request_multiplexing"]==true && u["language_context"]=="ruby"}; raise unless units.map{|u|u["key"]}.uniq.size==units.size'
+          ruby -rjson -e 'm=JSON.parse(File.read("generated/graal/manifest.json")); r=m["routes"].size; units=m["isolate_units"]; raise unless units.count{|u|u["kind"]=="route"}==r; raise unless units.any?{|u|u["kind"]=="group" && u["group"]=="orders"}; raise unless units.all?{|u|u["context_count"]==1 && u["host_thread_pool_scope"]=="process-shared" && u["host_threads_reused_across_isolates"]==true && u["host_thread_affinity"]=="none" && u["execution_concurrency"]==5 && u["admission_limit"]==5 && u["request_multiplexing"]==true && u["language_context"]=="ruby"}; raise unless units.map{|u|u["key"]}.uniq.size==units.size'
 
   graal-warm-context:
     runs-on: ubuntu-latest
@@ -264,7 +266,7 @@ jobs:
           ruby-version: truffleruby+graalvm-34.0.1
           bundler-cache: true
       - run: bundle exec truffleruby bin/build-runtime
-      - name: Reuse one route Context across five host threads and prove request-local cleanup
+      - name: Reuse one route Context across reusable host threads and prove request-local cleanup
         run: |
           cat >/tmp/graal-smoke.rb <<'RUBY'
           require "json"
