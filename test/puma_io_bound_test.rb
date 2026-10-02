@@ -4,44 +4,35 @@ require "test_helper"
 require_relative "../lib/ores_rails/puma_io_bound"
 
 class PumaIoBoundTest < ActiveSupport::TestCase
-  def app
-    lambda do |env|
-      [200, { "content-type" => "text/plain" }, [env["ores.puma.io_bound"] ? "io" : "regular"]]
-    end
-  end
+  FakeRequest = Struct.new(:env)
 
-  test "data-backed Rails routes mark Puma request threads as IO-bound" do
+  test "controller IO classification marks the current Puma processor" do
     marks = 0
-    middleware = OresRails::PumaIoBound.new(app)
+    request = FakeRequest.new("puma.mark_as_io_bound" => -> { marks += 1 })
 
-    status, _headers, body = middleware.call(
-      "PATH_INFO" => "/users/demo",
-      "puma.mark_as_io_bound" => -> { marks += 1 }
-    )
-
-    assert_equal 200, status
-    assert_equal ["io"], body
+    assert_equal true, OresRails::PumaIoBound.mark!(request, enabled: true)
     assert_equal 1, marks
+    assert_equal true, request.env["ores.puma.io_bound"]
   end
 
-  test "health route preserves regular thread capacity" do
+  test "CPU-bound controller policy does not consume IO headroom" do
     marks = 0
-    middleware = OresRails::PumaIoBound.new(app)
+    request = FakeRequest.new("puma.mark_as_io_bound" => -> { marks += 1 })
 
-    _status, _headers, body = middleware.call(
-      "PATH_INFO" => "/healthz",
-      "puma.mark_as_io_bound" => -> { marks += 1 }
-    )
-
-    assert_equal ["regular"], body
+    assert_equal false, OresRails::PumaIoBound.mark!(request, enabled: false)
     assert_equal 0, marks
+    assert_nil request.env["ores.puma.io_bound"]
   end
 
-  test "middleware degrades safely when the Rack server is not Puma 8" do
-    middleware = OresRails::PumaIoBound.new(app)
+  test "classification safely degrades outside Puma 8" do
+    request = FakeRequest.new({})
 
-    _status, _headers, body = middleware.call("PATH_INFO" => "/users/demo")
+    assert_equal false, OresRails::PumaIoBound.mark!(request, enabled: true)
+  end
 
-    assert_equal ["regular"], body
+  test "health controller opts out while data controllers inherit IO policy" do
+    assert_equal false, Healthz::Show::EndpointController.ores_puma_io_bound?
+    assert_equal true, Users::Show::EndpointController.ores_puma_io_bound?
+    assert_equal true, Products::Show::EndpointController.ores_puma_io_bound?
   end
 end
