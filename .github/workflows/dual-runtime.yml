@@ -105,7 +105,7 @@ jobs:
           grep -Fq '"app/views/users/show/endpoint/show.json.erb"' generated/lambda/manifest.json
           grep -Fq '# --- APP MODEL app/models/user.rb (executed) ---' generated/lambda/routes/users/'[id]'/_get/handler.rb
           grep -Fq '# --- APP CONTROLLER app/controllers/users/show/endpoint_controller.rb (executed) ---' generated/lambda/routes/users/'[id]'/_get/handler.rb
-          grep -Fq 'OresApp::EmbeddedViews.add({' generated/lambda/routes/users/'[id]'/_get/handler.rb
+          grep -Fq 'OresApp::ViewRuntime.add({' generated/lambda/routes/users/'[id]'/_get/handler.rb
           grep -Fq 'app/controllers/users/show/endpoint_controller' routes/users/'[id]'/handler.rb
           grep -Fq 'Users::Show::EndpointController.call_ores_action("show", request)' routes/users/'[id]'/handler.rb
           grep -Fq '"controller_packaging": "direct-executable-source"' generated/lambda/manifest.json
@@ -133,7 +133,7 @@ jobs:
           test -f generated/lambda/groups/orders/handler.rb
           grep -Fq '"handler_granularity": "group"' generated/lambda/manifest.json
           grep -q 'case route.group' generated/lambda/entrypoint.rb
-          ! grep -R -E 'config/environment|Rails\.application' generated/lambda
+          ! grep -R -E 'config/environment|Rails\.application|ActionController|ActionView' generated/lambda
 
       - name: Generate route and group Graal isolate units without Rails
         env:
@@ -159,7 +159,7 @@ jobs:
           grep -Fq '# --- ROUTE ADAPTER routes/users/[id]/handler.rb ---' 'generated/graal/routes/users/[id]/_get/handler.rb'
           grep -Fq '# --- APP MODEL app/models/user.rb (executed) ---' 'generated/graal/routes/users/[id]/_get/handler.rb'
           grep -Fq '# --- APP CONTROLLER app/controllers/users/show/endpoint_controller.rb (executed) ---' 'generated/graal/routes/users/[id]/_get/handler.rb'
-          grep -Fq 'OresApp::EmbeddedViews.add({' 'generated/graal/routes/users/[id]/_get/handler.rb'
+          grep -Fq 'OresApp::ViewRuntime.add({' 'generated/graal/routes/users/[id]/_get/handler.rb'
           grep -Fq 'Users::Show::EndpointController.call_ores_action("show", request)' 'routes/users/[id]/handler.rb'
           grep -Fq '"controller_packaging": "direct-executable-source"' generated/graal/manifest.json
           grep -Fq '"view_runtime": "plain-erb-in-memory"' generated/graal/manifest.json
