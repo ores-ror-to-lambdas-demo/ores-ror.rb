@@ -135,6 +135,14 @@ jobs:
             exit 1
           fi
 
+          printf '%s\n' '# GENERATED ORES RAILS-FREE HANDLER. DO NOT EDIT OR COMMIT.' > "$RUNNER_TEMP/fake-handler.rb"
+          ln -s "$RUNNER_TEMP/fake-handler.rb" app/controllers/users/show/handler.rb
+          if ORES_BUILD_TARGET=lambda ruby bin/build-runtime; then
+            echo "symlinked generated handler sidecar unexpectedly passed" >&2
+            exit 1
+          fi
+          rm app/controllers/users/show/handler.rb "$RUNNER_TEMP/fake-handler.rb"
+
       - name: Generate route-granularity Lambda artifacts without Rails
         env:
           ORES_BUILD_TARGET: lambda
