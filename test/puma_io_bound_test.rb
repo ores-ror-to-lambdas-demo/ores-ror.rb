@@ -17,7 +17,7 @@ class PumaIoBoundTest < ActiveSupport::TestCase
 
   test "CPU-bound controller policy does not consume IO headroom" do
     marks = 0
-    request = FakeRequest.new("puma.mark_as_io_bound" => -> { marks += 1 })
+    request = FakeRequest.new({ "puma.mark_as_io_bound" => -> { marks += 1 } })
 
     assert_equal false, OresRails::PumaIoBound.mark!(request, enabled: false)
     assert_equal 0, marks
