@@ -12,9 +12,12 @@ permissions:
 jobs:
   rails-mri-server:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8
         with:
           ruby-version: '3.4'
           bundler-cache: true
@@ -40,9 +43,12 @@ jobs:
 
   rails-truffleruby-server:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8
         with:
           ruby-version: truffleruby+graalvm-34.0.1
           bundler-cache: true
@@ -64,9 +70,12 @@ jobs:
 
   rails-free-codegen:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8
         with:
           ruby-version: '3.4'
           bundler-cache: false
@@ -85,6 +94,14 @@ jobs:
           test -f generated/lambda/routes/orders/'[id]'/cancel/_post/handler.rb
           grep -Fq '"rails_application_initialized": false' generated/lambda/manifest.json
           grep -Fq '"route_source": "config/routes.rb:ripper-static"' generated/lambda/manifest.json
+          grep -Fq '"route_handler_authority": "generated app/controllers/**/handler.rb sidecars"' generated/lambda/manifest.json
+          test -f app/controllers/users/show/handler.rb
+          test -f app/controllers/orders/cancel/handler.rb
+          git check-ignore -q app/controllers/users/show/handler.rb
+          test -z "$(git ls-files ':(glob)app/controllers/**/handler.rb')"
+          test ! -d routes
+          grep -Fq 'CONTROLLER_PATH = "users/show/endpoint"' app/controllers/users/show/handler.rb
+          grep -Fq 'ACTION = "show"' app/controllers/users/show/handler.rb
           ! grep -R -E 'config/environment|Rails\.application' generated/lambda
 
       - name: Generate group-granularity Lambda artifacts without Rails
@@ -112,11 +129,12 @@ jobs:
           grep -Fq '"host_thread_pool_size_per_context": 5' generated/graal/manifest.json
           grep -Fq '"language_context": "ruby"' generated/graal/manifest.json
           grep -Fq '"request_multiplexing": true' generated/graal/manifest.json
-          grep -Fq '"route_handler_authority": "routes/**/handler.rb"' generated/graal/manifest.json
+          grep -Fq '"route_handler_authority": "generated app/controllers/**/handler.rb sidecars"' generated/graal/manifest.json
           grep -Fq '"engine_scope": "process-shared"' generated/graal/manifest.json
-          test -f 'routes/users/[id]/handler.rb'
-          test -f 'routes/orders/[id]/cancel/handler.rb'
-          grep -Fq '# --- PHYSICAL routes/users/[id]/handler.rb ---' 'generated/graal/routes/users/[id]/_get/handler.rb'
+          test -f app/controllers/users/show/handler.rb
+          git check-ignore -q app/controllers/users/show/handler.rb
+          test ! -d routes
+          grep -Fq '# --- GENERATED SIDECAR app/controllers/users/show/handler.rb ---' 'generated/graal/routes/users/[id]/_get/handler.rb'
           grep -Fq '"source_memory": "host-read-only-shareable"' generated/graal/manifest.json
           grep -Fq '"supported_isolation_granularities"' generated/graal/manifest.json
           ! grep -R -E 'config/environment|Rails\.application' generated/graal
@@ -128,8 +146,10 @@ jobs:
       BUNDLE_WITHOUT: rails:test
       ORES_BUILD_TARGET: graal
     steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8
         with:
           ruby-version: truffleruby+graalvm-34.0.1
           bundler-cache: false
@@ -188,15 +208,19 @@ jobs:
 
   truffleruby-aws-lambda:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build Lambda image without Rails bundle
         run: docker build --platform linux/amd64 -f aws-lambda/Dockerfile -t ores-ror-truffleruby-lambda:test .
       - name: Verify Rails gem is absent
         run: docker run --rm --entrypoint truffleruby ores-ror-truffleruby-lambda:test -e 'abort "rails gem present" unless Gem::Specification.find_all_by_name("rails").empty?'
       - name: Install AWS Lambda Runtime Interface Emulator
         run: |
-          curl --fail --location --output aws-lambda-rie https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/latest/download/aws-lambda-rie
+          curl --fail --location --retry 3 --output aws-lambda-rie https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/download/v1.37/aws-lambda-rie
+          echo '6b1e686e62ab2baf5759c412c4864276ef2a88b094fca53ec070637ccba9b9a5  aws-lambda-rie' | sha256sum -c -
           chmod +x aws-lambda-rie
       - name: Invoke generated health handler
         run: |
