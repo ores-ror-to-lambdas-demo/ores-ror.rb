@@ -2,7 +2,6 @@
 # frozen_string_literal: true
 
 require "digest"
-require "erb"
 require "fileutils"
 require "json"
 require "pathname"
@@ -70,9 +69,16 @@ def physical_route_const(route)
 end
 
 APPLICATION_MODEL_FILE = "app/models/application_model.rb"
+APPLICATION_CONTROLLER_FILE = "app/controllers/application_controller.rb"
+ORES_ENDPOINT_CONTROLLER_FILE = "app/controllers/ores_endpoint_controller.rb"
+CONTROLLER_RUNTIME_FILE = "lib/ores_app/controller_runtime.rb"
+VIEW_RUNTIME_FILE = "lib/ores_app/view_runtime.rb"
+ROUTE_HANDLER_MODE = ENV.fetch("ORES_ROUTE_HANDLER_MODE", "hybrid").downcase
+VALID_ROUTE_HANDLER_MODES = %w[hybrid manual annotation].freeze
+abort "ORES_ROUTE_HANDLER_MODE must be hybrid, manual, or annotation" unless VALID_ROUTE_HANDLER_MODES.include?(ROUTE_HANDLER_MODE)
 
 FORBIDDEN_HANDLER_SOURCE = {
-  /\brequire(?:_relative)?\b/ => "dynamic require",
+  /\brequire\s*(?:\(|["'])/ => "dynamic require",
   /\b(?:File|Dir|IO)\s*\./ => "filesystem API",
   /\b(?:Process\.|system\s*\(|exec\s*\(|spawn\s*\(|fork\b)/ => "process API",
   /\b(?:Socket|TCPSocket|UDPSocket|UNIXSocket)\b/ => "raw socket API",
@@ -88,7 +94,9 @@ end
 def validate_app_dependencies!(routes)
   abort "missing #{APPLICATION_MODEL_FILE}" unless File.file?(File.join(ROOT, APPLICATION_MODEL_FILE))
 
-  executable_sources = [APPLICATION_MODEL_FILE] + routes.map { |route| route.fetch(:model_file) } +
+  executable_sources = [APPLICATION_MODEL_FILE] +
+    routes.map { |route| route.fetch(:model_file) } +
+    routes.map { |route| route.fetch(:controller_file) } +
     routes.flat_map { |route| %w[json html].map { |format| view_file_for(route, format) } }
   executable_sources.uniq.each do |relative|
     source = File.read(File.join(ROOT, relative))
@@ -98,76 +106,85 @@ def validate_app_dependencies!(routes)
   end
 end
 
-def compiled_erb_body(template)
-  ERB.new(template, trim_mode: "-").src.lines.reject { |line| line.start_with?("#coding:") }.join
-end
-
-def app_model_sources(routes)
-  files = [APPLICATION_MODEL_FILE] + routes.map { |route| route.fetch(:model_file) }
-  files.uniq.map do |relative|
+def route_model_sources(routes)
+  routes.map { |route| route.fetch(:model_file) }.uniq.map do |relative|
     <<~RUBY
-      # --- APP MODEL #{relative} ---
+      # --- APP MODEL #{relative} (executed) ---
       #{flatten_ruby_source(File.join(ROOT, relative))}
     RUBY
   end.join("\n")
 end
 
-def presentation_source(route)
-  controller_file = route.fetch(:controller_file)
-  model_file = route.fetch(:model_file)
-  json_view_file = view_file_for(route, "json")
-  html_view_file = view_file_for(route, "html")
-  controller_source = File.read(File.join(ROOT, controller_file))
-  json_view_source = File.read(File.join(ROOT, json_view_file))
-  html_view_source = File.read(File.join(ROOT, html_view_file))
-  compiled_json_view = compiled_erb_body(json_view_source)
-  compiled_html_view = compiled_erb_body(html_view_source)
-  const = route_const(route)
+def route_controller_sources(routes)
+  routes.map { |route| route.fetch(:controller_file) }.uniq.map do |relative|
+    <<~RUBY
+      # --- APP CONTROLLER #{relative} (executed) ---
+      #{flatten_ruby_source(File.join(ROOT, relative))}
+    RUBY
+  end.join("\n")
+end
+
+def embedded_view_registration(routes)
+  files = routes.flat_map { |route| route.fetch(:view_files) }.uniq
+  entries = files.map do |relative|
+    logical = relative.delete_prefix("app/views/")
+    source = File.read(File.join(ROOT, relative))
+    "      #{logical.inspect} => #{source.dump}"
+  end
 
   <<~RUBY
-    # --- APP CONTROLLER #{controller_file} (packaged source; not executed in Rails-free runtime) ---
-    module OresGenerated
-      module AppSources
-        module #{const}
-          CONTROLLER_FILE = #{controller_file.inspect}.freeze
-          CONTROLLER_SOURCE = #{controller_source.dump}.freeze
-          MODEL_FILE = #{model_file.inspect}.freeze
-          JSON_VIEW_FILE = #{json_view_file.inspect}.freeze
-          JSON_VIEW_SOURCE = #{json_view_source.dump}.freeze
-          HTML_VIEW_FILE = #{html_view_file.inspect}.freeze
-          HTML_VIEW_SOURCE = #{html_view_source.dump}.freeze
-          VIEW_FILE = JSON_VIEW_FILE
-          VIEW_SOURCE = JSON_VIEW_SOURCE
-        end
-      end
+    # --- APP VIEWS (plain ERB, in-memory registry) ---
+    OresApp::ViewRuntime.add({
+    #{entries.join(",\n")}
+    })
+  RUBY
+end
 
-      module Presenters
-        module #{const}
+def shared_runtime_source(mode)
+  source = String.new(<<~RUBY)
+    # frozen_string_literal: true
+    # GENERATED FILE. DO NOT EDIT OR COMMIT.
+    # Shared controller/model/runtime code for #{mode} execution.
+
+    ORES_EXECUTION_MODE = #{mode.inspect} unless defined?(ORES_EXECUTION_MODE)
+  RUBY
+  source << "ORES_GRAAL_RUNTIME = true unless defined?(ORES_GRAAL_RUNTIME)\n" if mode == "graal"
+  source << <<~RUBY
+    require "json"
+    require "erb"
+  RUBY
+
+  [
+    "lib/ores_app/routes.rb",
+    "lib/ores_app/middleware.rb",
+    "lib/ores_app/http_database.rb",
+    "lib/ores_app/handlers.rb",
+    "lib/ores_app/thread_state_boundary.rb",
+    "lib/ores_app/dispatcher.rb",
+    CONTROLLER_RUNTIME_FILE,
+    VIEW_RUNTIME_FILE,
+    APPLICATION_MODEL_FILE,
+    ORES_ENDPOINT_CONTROLLER_FILE
+  ].each do |relative|
+    source << "\n# --- #{relative} ---\n"
+    source << flatten_ruby_source(File.join(ROOT, relative))
+    source << "\n"
+  end
+  source
+end
+
+def autogenerated_physical_handler_source(route)
+  <<~RUBY
+    # frozen_string_literal: true
+    # GENERATED FROM #{route.fetch(:controller_route_annotation)}
+
+    module OresApp
+      module PhysicalRouteHandlers
+        module #{physical_route_const(route)}
           module_function
 
-          def call(response, request)
-            model = #{route.fetch(:model_class)}.new(response.fetch(:body))
-            format = requested_format(request)
-            headers = response.fetch(:headers, {}).merge(
-              "content-type" => (format == :html ? "text/html; charset=utf-8" : "application/json; charset=utf-8")
-            )
-            response.merge(
-              headers: headers,
-              body: format == :html ? render_html_view(model) : render_json_view(model)
-            )
-          end
-
-          def requested_format(request)
-            accept = request.fetch("headers", {}).fetch("accept", "").to_s.downcase
-            accept.include?("text/html") ? :html : :json
-          end
-
-          def render_json_view(model)
-            #{compiled_json_view.lines.map { |line| "            #{line}" }.join}
-          end
-
-          def render_html_view(model)
-            #{compiled_html_view.lines.map { |line| "            #{line}" }.join}
+          def call(request)
+            ::#{route.fetch(:controller_class)}.call_ores_action(#{route.fetch(:action).inspect}, request)
           end
         end
       end
@@ -175,19 +192,61 @@ def presentation_source(route)
   RUBY
 end
 
+def route_handler_mapping(route)
+  relative = physical_route_relative(route)
+  manual_path = File.join(ROOT, relative)
+  has_manual = File.file?(manual_path)
+  annotation = route[:controller_route_annotation]
+
+  case ROUTE_HANDLER_MODE
+  when "manual"
+    abort "manual route handler required for #{route.fetch(:verb)} #{route.fetch(:path)}: #{relative}" unless has_manual
+    { mode: "manual", relative: relative, source: File.read(manual_path) }
+  when "annotation"
+    abort "controller annotation required for autogenerated route #{route.fetch(:verb)} #{route.fetch(:path)} -> #{route.fetch(:controller)}##{route.fetch(:action)}" unless annotation
+    { mode: "controller-annotation", relative: nil, source: autogenerated_physical_handler_source(route) }
+  when "hybrid"
+    if has_manual
+      { mode: "manual", relative: relative, source: File.read(manual_path) }
+    elsif annotation
+      { mode: "controller-annotation", relative: nil, source: autogenerated_physical_handler_source(route) }
+    else
+      abort "route #{route.fetch(:verb)} #{route.fetch(:path)} needs either #{relative} or a matching # ores-route annotation on #{route.fetch(:controller_file)}"
+    end
+  else
+    abort "unsupported route handler mode #{ROUTE_HANDLER_MODE.inspect}"
+  end
+end
+
+def validate_manual_handler_source!(route, relative, source)
+  FORBIDDEN_HANDLER_SOURCE.each do |pattern, label|
+    abort "physical handler #{relative} uses forbidden #{label}" if source.match?(pattern)
+  end
+
+  controller_file = route.fetch(:controller_file)
+  controller_token = controller_file.delete_prefix("app/controllers/").delete_suffix(".rb")
+  unless source.include?(controller_token)
+    abort "physical handler #{relative} must import mapped controller #{controller_file}"
+  end
+
+  direct_call = "::#{route.fetch(:controller_class)}.call_ores_action(#{route.fetch(:action).inspect}, request)"
+  unless source.include?(direct_call)
+    abort "physical handler #{relative} must directly invoke #{route.fetch(:controller_class)}##{route.fetch(:action)}"
+  end
+
+  if source.include?("OresApp::Handlers.call")
+    abort "physical handler #{relative} must not bypass the controller through OresApp::Handlers"
+  end
+end
+
 def validate_physical_handlers!(routes)
   route_sources = routes.map { |route| physical_route_relative(route) }
   duplicates = route_sources.group_by(&:itself).select { |_path, rows| rows.length > 1 }.keys
   abort "multiple Rails routes map to the same physical handler path: #{duplicates.join(", ")}" unless duplicates.empty?
 
-  missing = route_sources.reject { |relative| File.file?(File.join(ROOT, relative)) }
-  abort "missing committed physical route handlers: #{missing.join(", ")}" unless missing.empty?
-
-  route_sources.each do |relative|
-    source = File.read(File.join(ROOT, relative))
-    FORBIDDEN_HANDLER_SOURCE.each do |pattern, label|
-      abort "physical handler #{relative} uses forbidden #{label}" if source.match?(pattern)
-    end
+  routes.each do |route|
+    mapping = route_handler_mapping(route)
+    validate_manual_handler_source!(route, mapping.fetch(:relative), mapping.fetch(:source)) if mapping.fetch(:mode) == "manual"
   end
 
   group_sources = routes.map { |route| physical_group_relative(route.fetch(:group)) }.uniq.select do |relative|
@@ -225,8 +284,6 @@ def write_generated_routes(path, routes)
     # frozen_string_literal: true
     # GENERATED FILE. DO NOT EDIT OR COMMIT.
 
-    require "ores_app/routes"
-
     module OresGenerated
       module Routes
         TABLE = [
@@ -241,16 +298,19 @@ def write_lambda_route_handler(path, route)
   FileUtils.mkdir_p(File.dirname(path))
   const = route_const(route)
   physical = physical_route_relative(route)
-  physical_source = flatten_ruby_source(File.join(ROOT, physical))
+  mapping = route_handler_mapping(route)
   File.write(path, <<~RUBY)
     # frozen_string_literal: true
     # GENERATED FILE. DO NOT EDIT OR COMMIT.
-    # Physical execution source: #{physical}
-    require "ores_app/handlers"
+    # Route/controller mapping: #{mapping.fetch(:mode)}
+    # Physical execution source: #{mapping.fetch(:relative) || route.fetch(:controller_route_annotation)}
 
-    #{app_model_sources([route])}
-    #{presentation_source(route)}
-    #{physical_source}
+    #{route_model_sources([route])}
+    #{embedded_view_registration([route])}
+    #{route_controller_sources([route])}
+
+    # --- ROUTE ADAPTER #{mapping.fetch(:relative) || route.fetch(:controller_route_annotation)} ---
+    #{mapping.fetch(:mode) == "manual" ? flatten_ruby_source(File.join(ROOT, physical)) : mapping.fetch(:source)}
 
     module OresGenerated
       module RouteHandlers
@@ -258,8 +318,7 @@ def write_lambda_route_handler(path, route)
           module_function
 
           def call(request)
-            response = OresApp::PhysicalRouteHandlers::#{physical_route_const(route)}.call(request)
-            OresGenerated::Presenters::#{const}.call(response, request)
+            OresApp::PhysicalRouteHandlers::#{physical_route_const(route)}.call(request)
           end
         end
       end
@@ -343,9 +402,7 @@ def write_lambda_entrypoint(routes, granularity)
     # frozen_string_literal: true
     # GENERATED FILE. DO NOT EDIT OR COMMIT.
 
-    app_root = File.expand_path("../..", __dir__)
-    $LOAD_PATH.unshift(File.join(app_root, "lib")) unless $LOAD_PATH.include?(File.join(app_root, "lib"))
-    require "ores_app/dispatcher"
+    require_relative "common"
     require_relative "routes"
     #{requires.join("\n    ")}
 
@@ -367,38 +424,23 @@ def flatten_ruby_source(path)
   File.readlines(path).reject { |line| line.match?(/^\s*require_relative\b/) }.join
 end
 
+def write_lambda_common
+  FileUtils.mkdir_p(LAMBDA_DIR)
+  path = File.join(LAMBDA_DIR, "common.rb")
+  File.write(path, shared_runtime_source("lambda"))
+  path
+end
+
 def write_graal_common
   FileUtils.mkdir_p(GRAAL_DIR)
-  source = String.new(<<~RUBY)
-    # frozen_string_literal: true
-    # GENERATED FILE. DO NOT EDIT OR COMMIT.
-    # Shared immutable source evaluated once in every route/group Context.
-    # The Java host should cache one Source object for this file per shared Engine.
-
-    ORES_GRAAL_RUNTIME = true unless defined?(ORES_GRAAL_RUNTIME)
-    ORES_EXECUTION_MODE = "graal" unless defined?(ORES_EXECUTION_MODE)
-  RUBY
-
-  %w[
-    lib/ores_app/routes.rb
-    lib/ores_app/middleware.rb
-    lib/ores_app/http_database.rb
-    lib/ores_app/handlers.rb
-    lib/ores_app/thread_state_boundary.rb
-    lib/ores_app/dispatcher.rb
-  ].each do |relative|
-    source << "\n# --- #{relative} ---\n"
-    source << flatten_ruby_source(File.join(ROOT, relative))
-    source << "\n"
-  end
   path = File.join(GRAAL_DIR, "common.rb")
-  File.write(path, source)
+  File.write(path, shared_runtime_source("graal"))
   path
 end
 
 def graal_unit_source(routes)
   cases = routes.map do |route|
-    "when #{route_id(route).inspect} then OresGenerated::Presenters::#{route_const(route)}.call(OresApp::PhysicalRouteHandlers::#{physical_route_const(route)}.call(request), request)"
+    "when #{route_id(route).inspect} then OresApp::PhysicalRouteHandlers::#{physical_route_const(route)}.call(request)"
   end.join("\n          ")
 
   String.new(<<~RUBY)
@@ -432,12 +474,14 @@ def write_graal_unit(relative, routes)
   path = File.join(GRAAL_DIR, relative)
   FileUtils.mkdir_p(File.dirname(path))
   source = String.new("# frozen_string_literal: true\n# GENERATED FILE. DO NOT EDIT OR COMMIT.\n")
-  source << "\n#{app_model_sources(routes)}\n"
+  source << "\n#{route_model_sources(routes)}\n"
+  source << "\n#{embedded_view_registration(routes)}\n"
+  source << "\n#{route_controller_sources(routes)}\n"
   routes.each do |route|
-    source << "\n#{presentation_source(route)}\n"
     physical = physical_route_relative(route)
-    source << "\n# --- PHYSICAL #{physical} ---\n"
-    source << flatten_ruby_source(File.join(ROOT, physical))
+    mapping = route_handler_mapping(route)
+    source << "\n# --- ROUTE ADAPTER #{mapping.fetch(:relative) || route.fetch(:controller_route_annotation)} ---\n"
+    source << (mapping.fetch(:mode) == "manual" ? flatten_ruby_source(File.join(ROOT, physical)) : mapping.fetch(:source))
     source << "\n"
   end
   source << graal_unit_source(routes)
@@ -476,6 +520,7 @@ when "lambda"
   validate_app_dependencies!(routes)
   FileUtils.rm_rf(LAMBDA_DIR)
   FileUtils.mkdir_p(LAMBDA_DIR)
+  write_lambda_common
   write_generated_routes(File.join(LAMBDA_DIR, "routes.rb"), routes)
   routes.each do |route|
     write_lambda_route_handler(File.join(LAMBDA_DIR, route_unit_relative(route)), route)
@@ -489,23 +534,30 @@ when "lambda"
     "schema" => "ores-lambda-manifest/v6",
     "application" => "ores-ror.rb",
     "entrypoint" => "generated/lambda/entrypoint.rb",
+    "shared_source" => "generated/lambda/common.rb",
     "runtime" => "ruby",
     "rails_boot" => false,
     "rails_application_initialized" => false,
     "route_source" => "config/routes.rb:ripper-static",
     "rails_route_authority" => "config/routes.rb",
-    "route_handler_authority" => "routes/**/handler.rb",
+    "route_handler_authority" => "manual routes/**/handler.rb or controller # ores-route annotation",
+    "route_handler_mapping_mode" => ROUTE_HANDLER_MODE,
+    "controller_route_annotation_syntax" => "# ores-route: VERB /path action=method",
     "mvc_source_root" => "app",
     "application_model" => APPLICATION_MODEL_FILE,
-    "controller_packaging" => "source-provenance-only",
-    "model_runtime" => "embedded-executable",
-    "view_runtime" => "build-time-compiled-erb",
+    "controller_packaging" => "direct-executable-source",
+    "model_runtime" => "embedded-executable-source",
+    "view_runtime" => "plain-erb-in-memory",
     "router_runtime" => "generated-rails-route-contract",
-    "middleware_runtime" => "shared-ruby-no-rails-app",
+    "middleware_runtime" => "controller-lifecycle-shared-ruby",
+    "controller_invocation" => "plain-ruby-controller-instance#action",
+    "framework_components" => [],
     "handler_granularity" => granularity,
     "routes" => routes.map do |route|
+      mapping = route_handler_mapping(route)
       route_manifest(route).merge(
-        source_handler: physical_route_relative(route),
+        route_handler_mapping: mapping.fetch(:mode),
+        source_handler: mapping.fetch(:relative),
         route_handler: "generated/lambda/#{route_unit_relative(route)}",
         group_handler: "generated/lambda/#{group_unit_relative(route.fetch(:group))}"
       )
@@ -532,7 +584,8 @@ when "graal"
       "key" => "route:#{route_id(route)}",
       "route_ids" => [route_id(route)],
       "group" => route.fetch(:group),
-      "source_handler" => physical_route_relative(route),
+      "source_handler" => route_handler_mapping(route).fetch(:relative),
+      "route_handler_mapping" => route_handler_mapping(route).fetch(:mode),
       "app_sources" => [route.fetch(:controller_file), route.fetch(:model_file), *route.fetch(:view_files)],
       "sources" => ["generated/graal/common.rb", "generated/graal/#{relative}"],
       "language_context" => "ruby",
@@ -550,7 +603,8 @@ when "graal"
       "key" => "group:#{group}",
       "route_ids" => grouped.map { |route| route_id(route) },
       "group" => group,
-      "source_handlers" => grouped.map { |route| physical_route_relative(route) },
+      "source_handlers" => grouped.map { |route| route_handler_mapping(route).fetch(:relative) }.compact,
+      "route_handler_mappings" => grouped.to_h { |route| [route_id(route), route_handler_mapping(route).fetch(:mode)] },
       "app_sources" => grouped.flat_map { |route| [route.fetch(:controller_file), route.fetch(:model_file), *route.fetch(:view_files)] }.uniq,
       "sources" => ["generated/graal/common.rb", "generated/graal/#{relative}"],
       "language_context" => "ruby",
@@ -569,16 +623,20 @@ when "graal"
     "rails_application_initialized" => false,
     "route_source" => "config/routes.rb:ripper-static",
     "rails_route_authority" => "config/routes.rb",
-    "route_handler_authority" => "routes/**/handler.rb",
+    "route_handler_authority" => "manual routes/**/handler.rb or controller # ores-route annotation",
+    "route_handler_mapping_mode" => ROUTE_HANDLER_MODE,
+    "controller_route_annotation_syntax" => "# ores-route: VERB /path action=method",
     "mvc_source_root" => "app",
     "application_model" => APPLICATION_MODEL_FILE,
-    "controller_packaging" => "source-provenance-only",
-    "model_runtime" => "embedded-executable",
-    "view_runtime" => "build-time-compiled-erb",
+    "controller_packaging" => "direct-executable-source",
+    "model_runtime" => "embedded-executable-source",
+    "view_runtime" => "plain-erb-in-memory",
     "router_runtime" => "generated-rails-route-contract",
-    "middleware_runtime" => "shared-ruby-no-rails-app",
+    "middleware_runtime" => "controller-lifecycle-shared-ruby",
     "runtime_adapter_repository" => "ores-ror-to-lambdas-demo/ores-ror.infra",
     "runtime_adapter_source" => "graal/bootstrap.rb",
+    "controller_invocation" => "plain-ruby-controller-instance#action",
+    "framework_components" => [],
     "engine_scope" => "process-shared",
     "language_context" => "ruby",
     "contexts_per_isolate" => 1,

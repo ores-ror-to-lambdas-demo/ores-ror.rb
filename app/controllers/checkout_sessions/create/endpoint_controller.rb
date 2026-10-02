@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+# ores-route: POST /checkout-sessions/:id action=create
 
 module CheckoutSessions
   module Create

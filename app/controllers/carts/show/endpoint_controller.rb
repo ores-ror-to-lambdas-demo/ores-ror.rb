@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+# ores-route: GET /carts/:id action=show
 
 module Carts
   module Show

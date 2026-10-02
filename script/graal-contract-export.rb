@@ -44,6 +44,8 @@ def run_case(route)
   invoker = factory.call(host_http)
   raise "generated unit did not return an invoker" unless invoker.respond_to?(:call)
   raise "Rails unexpectedly loaded in Graal route unit" if defined?(Rails)
+  raise "ActionController unexpectedly loaded in Graal route unit" if defined?(ActionController)
+  raise "ActionView unexpectedly loaded in Graal route unit" if defined?(ActionView)
 
   %w[json html].map do |format|
     request = RouteContract.request_for(route, format)

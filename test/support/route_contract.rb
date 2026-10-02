@@ -78,12 +78,14 @@ module RouteContract
         "request_id" => request.fetch("request_id")
       }
     else
-      database_response(
+      payload = database_response(
         method: request.fetch("method"),
         path: request.fetch("path"),
         query: request.fetch("query"),
         body: request["body"]
       ).fetch(:body)
+      payload = payload.merge("controller_execution" => "products/show#show") if route.fetch("name") == "product"
+      payload
     end
   end
 

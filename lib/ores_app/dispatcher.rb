@@ -23,11 +23,9 @@ module OresApp
       request["isolate_pool"] = route.pool
       request["controller"] = route.controller
       request["action"] = route.action
+      request["middleware"] = route.middleware || Routes::DEFAULT_MIDDLEWARE
 
-      result = Middleware.call(route.middleware || Routes::DEFAULT_MIDDLEWARE, request) do
-        invoker.call(route, request)
-      end
-
+      result = invoker.call(route, request)
       serialize_response(result)
     rescue ArgumentError, KeyError => error
       serialize_response(status: 400, headers: {}, body: { error: error.message })
@@ -73,7 +71,6 @@ module OresApp
       return body unless body.is_a?(String)
       return nil if body.empty?
       return body unless content_type.downcase.include?("json")
-
       JSON.parse(body)
     rescue JSON::ParserError => error
       raise ArgumentError, "invalid JSON body: #{error.message}"
@@ -81,7 +78,6 @@ module OresApp
 
     def parse_query_string(query_string)
       return {} if query_string.nil? || query_string.to_s.empty?
-
       URI.decode_www_form(query_string.to_s).each_with_object({}) do |(key, value), out|
         if out.key?(key)
           out[key] = Array(out[key]) << value
@@ -97,18 +93,12 @@ module OresApp
       headers["content-type"] ||= "application/json; charset=utf-8"
       body = result[:body]
       body = JSON.generate(body) unless body.is_a?(String)
-
-      {
-        "status" => Integer(status),
-        "headers" => headers,
-        "body" => body
-      }
+      { "status" => Integer(status), "headers" => headers, "body" => body }
     end
 
     def stringify_keys(value)
       return value.transform_keys(&:to_s).transform_values { |entry| stringify_keys(entry) } if value.is_a?(Hash)
       return value.map { |entry| stringify_keys(entry) } if value.is_a?(Array)
-
       value
     end
     private_class_method :normalize_request, :normalize_body, :parse_query_string, :serialize_response, :stringify_keys

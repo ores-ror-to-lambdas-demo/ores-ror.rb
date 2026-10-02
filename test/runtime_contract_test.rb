@@ -27,4 +27,36 @@ class RuntimeContractTest < ActionDispatch::IntegrationTest
       { path: "/checkout-sessions/cart-1", method: :post }
     )
   end
+
+  test "product action custom logic runs directly without dispatch_ores_endpoint" do
+    source = File.read(Rails.root.join("app/controllers/products/show/endpoint_controller.rb"))
+    refute_includes source, "dispatch_ores_endpoint"
+
+    mock = lambda do |method, path, body: nil, query: {}|
+      {
+        status: 200,
+        body: {
+          "ok" => true,
+          "method" => method.to_s.upcase,
+          "path" => path,
+          "query" => query,
+          "body" => body
+        }
+      }
+    end
+
+    OresApp::HttpDatabase.stub(:request, mock) do
+      get "/products/demo-product", headers: {
+        "accept" => "application/json",
+        "x-request-id" => "direct-controller-product"
+      }
+    end
+
+    assert_response :success
+    assert_equal "direct", response.headers["x-ores-controller-execution"]
+    assert_equal "request_id", response.headers["x-ores-middleware-chain"]
+    payload = JSON.parse(response.body)
+    assert_equal "products/show#show", payload.fetch("controller_execution")
+    assert_equal "/products/demo-product", payload.fetch("path")
+  end
 end
