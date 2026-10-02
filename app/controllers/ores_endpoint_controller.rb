@@ -4,6 +4,11 @@ require "json"
 require_relative "../../lib/ores_app/dispatcher"
 
 class OresEndpointController < ApplicationController
+  # Dual-runtime endpoints must share one middleware/security contract with
+  # Rails-free Graal/Lambda. Do not let Rails-only CSRF interception create
+  # behavior that the generated runtime cannot reproduce.
+  skip_forgery_protection
+
   private
 
   def dispatch_ores_endpoint
