@@ -2,6 +2,7 @@
 # frozen_string_literal: true
 
 require "json"
+require "puma"
 require "puma/configuration"
 
 path = File.expand_path("../config/puma.rb", __dir__)
