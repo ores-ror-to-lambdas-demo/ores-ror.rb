@@ -103,6 +103,31 @@ def prepare_endpoint_handlers!(routes)
     route = rows.first
     path = File.join(ROOT, route.fetch(:handler_path))
     FileUtils.mkdir_p(File.dirname(path))
+    modules = route.fetch(:handler_constant).split("::")
+    body = <<~RUBY
+      CONTROLLER_PATH = #{route.fetch(:controller).inspect}.freeze
+      ACTION = #{route.fetch(:action).inspect}.freeze
+      VIEW_LOGICAL_PATH = #{route.fetch(:view_logical_path).inspect}.freeze
+      VIEW_FILES = #{route.fetch(:view_files).inspect}.freeze
+
+      module_function
+
+      def call(request)
+        OresApp::Handlers.call(CONTROLLER_PATH, ACTION, request)
+      end
+    RUBY
+    indent = +""
+    nested = +""
+    modules.each do |name|
+      nested << "#{indent}module #{name}\n"
+      indent << "  "
+    end
+    body.each_line { |line| nested << "#{indent}#{line}" }
+    modules.reverse_each do
+      indent = indent.delete_suffix("  ")
+      nested << "#{indent}end\n"
+    end
+
     File.write(path, <<~RUBY)
       # frozen_string_literal: true
       # #{GENERATED_HANDLER_MARKER}
@@ -110,20 +135,7 @@ def prepare_endpoint_handlers!(routes)
       # Rails source: #{route.fetch(:controller_file)}
       # Rails view lookup: #{route.fetch(:view_logical_path)}
 
-      module #{route.fetch(:handler_constant).split("::")[0...-1].join("::")}
-        module Handler
-          CONTROLLER_PATH = #{route.fetch(:controller).inspect}.freeze
-          ACTION = #{route.fetch(:action).inspect}.freeze
-          VIEW_LOGICAL_PATH = #{route.fetch(:view_logical_path).inspect}.freeze
-          VIEW_FILES = #{route.fetch(:view_files).inspect}.freeze
-
-          module_function
-
-          def call(request)
-            OresApp::Handlers.call(CONTROLLER_PATH, ACTION, request)
-          end
-        end
-      end
+      #{nested}
     RUBY
   end
 end
