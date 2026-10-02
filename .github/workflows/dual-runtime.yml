@@ -262,6 +262,8 @@ jobs:
           factory = eval(File.read(unit), TOPLEVEL_BINDING, unit)
           invoker = factory.call(host_http)
           raise "Rails application unexpectedly loaded" if defined?(Rails)
+          raise "ActionController unexpectedly loaded in group isolate" if defined?(ActionController)
+          raise "ActionView unexpectedly loaded in group isolate" if defined?(ActionView)
           raise "order model not loaded" unless defined?(Order)
           raise "show controller not loaded" unless defined?(Orders::Show::EndpointController)
           raise "cancel controller not loaded" unless defined?(Orders::Cancel::EndpointController)
