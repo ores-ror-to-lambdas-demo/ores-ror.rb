@@ -66,8 +66,9 @@ class OresEndpointController < ApplicationController
   end
 
   def ores_request_envelope
-    path_params = request.path_parameters.to_h.reject do |key, _|
-      %w[controller action ores_middleware].include?(key.to_s)
+    path_params = request.path_parameters.to_h.each_with_object({}) do |(key, value), out|
+      next if %w[controller action ores_middleware].include?(key.to_s)
+      out[key.to_s] = value
     end
 
     {
