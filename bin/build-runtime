@@ -150,6 +150,7 @@ def shared_runtime_source(mode)
   source << <<~RUBY
     require "action_controller"
     require "action_view"
+    require "action_dispatch/request/utils"
     require "json"
   RUBY
 
