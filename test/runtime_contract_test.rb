@@ -10,6 +10,7 @@ class RuntimeContractTest < ActionDispatch::IntegrationTest
     assert_equal true, payload.fetch("ok")
     assert_equal "ores-ror.rb", payload.fetch("service")
     assert_equal "contract-health", response.headers["x-request-id"]
+    assert_equal "request_id", response.headers["x-ores-middleware-chain"]
     assert_equal "rails", response.headers["x-ores-execution-mode"]
     assert response.headers["x-ores-runtime"].to_s.length > 0
     assert_equal "application/json", response.media_type
@@ -18,11 +19,11 @@ class RuntimeContractTest < ActionDispatch::IntegrationTest
 
   test "Rails router recognizes conventional controller and action names" do
     assert_recognizes(
-      { controller: "users/show/endpoint", action: "show", id: "demo-user" },
+      { controller: "users/show/endpoint", action: "show", id: "demo-user", ores_middleware: "request_id,users_show_header" },
       { path: "/users/demo-user", method: :get }
     )
     assert_recognizes(
-      { controller: "checkout_sessions/create/endpoint", action: "create", id: "cart-1" },
+      { controller: "checkout_sessions/create/endpoint", action: "create", id: "cart-1", ores_middleware: "request_id" },
       { path: "/checkout-sessions/cart-1", method: :post }
     )
   end
