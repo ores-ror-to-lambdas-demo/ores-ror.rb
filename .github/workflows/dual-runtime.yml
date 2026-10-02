@@ -215,7 +215,7 @@ jobs:
           git check-ignore -q app/controllers/users/show/handler.rb
           test -z "$(git ls-files ':(glob)app/controllers/**/handler.rb')"
           test ! -d routes
-                    grep -Fq '# --- GENERATED ENDPOINT SIDECAR app/controllers/users/show/handler.rb ---' 'generated/graal/routes/users/[id]/_get/handler.rb'
+          grep -Fq '# --- GENERATED ENDPOINT SIDECAR app/controllers/users/show/handler.rb ---' 'generated/graal/routes/users/[id]/_get/handler.rb'
           grep -Fq '# --- APP MODEL app/models/user.rb (executed) ---' 'generated/graal/routes/users/[id]/_get/handler.rb'
           grep -Fq '# --- APP CONTROLLER app/controllers/users/show/endpoint_controller.rb (executed) ---' 'generated/graal/routes/users/[id]/_get/handler.rb'
           grep -Fq 'OresApp::ViewRuntime.add({' 'generated/graal/routes/users/[id]/_get/handler.rb'
