@@ -53,6 +53,7 @@ def run_case(route)
       format: format,
       status: response.fetch("status"),
       content_type: response.fetch("headers").fetch("content-type"),
+      headers: response.fetch("headers"),
       body: response.fetch("body")
     )
   end

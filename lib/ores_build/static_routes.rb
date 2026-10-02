@@ -3,6 +3,8 @@
 require "digest"
 require "pathname"
 require "ripper"
+require_relative "../ores_app/routes"
+require_relative "../ores_app/middleware"
 
 module OresBuild
   class StaticRoutes
@@ -168,7 +170,15 @@ module OresBuild
       path = join_paths(context.path_prefix, raw_path)
       explicit_name = options["as"]
       name = explicit_name ? join_names(context.as_prefix, explicit_name.to_s) : generated_name(verb, path, controller, action)
-      add_route(verb.upcase, path, controller, action.to_s, name, context.group)
+      add_route(
+        verb.upcase,
+        path,
+        controller,
+        action.to_s,
+        name,
+        context.group,
+        middleware: middleware_from_options(options)
+      )
     end
 
     def add_resources(name, options, context, line)
@@ -241,7 +251,7 @@ module OresBuild
       only - except
     end
 
-    def add_route(verb, path, controller, action, name, group, duplicate_name_ok: false)
+    def add_route(verb, path, controller, action, name, group, middleware: nil, duplicate_name_ok: false)
       controller_file = controller_file_for(controller)
       fail! "Rails convention expected controller file #{relative(controller_file)}" unless controller_file.file?
       fail! "Rails convention expected #{controller}##{action} in #{relative(controller_file)}" unless source_defines_action?(controller_file, action)
@@ -271,7 +281,7 @@ module OresBuild
         model_file: relative(model_file),
         view_logical_path: "#{controller}/#{action}",
         view_files: view_files,
-        middleware: ["request_id"],
+        middleware: OresApp::Middleware.normalize_names(middleware || OresApp::Routes::DEFAULT_MIDDLEWARE),
         group: group_name,
         pool: group_name,
         route_key: "#{verb} #{normalize_path(path)}"
@@ -368,6 +378,12 @@ module OresBuild
       return [] unless args_node.is_a?(Array)
       return args_node[1] || [] if args_node[0] == :args_add_block
       []
+    end
+
+    def middleware_from_options(options)
+      defaults = options["defaults"]
+      configured = defaults.is_a?(Hash) ? defaults["ores_middleware"] : nil
+      OresApp::Middleware.normalize_names(configured || OresApp::Routes::DEFAULT_MIDDLEWARE)
     end
 
     def options_from(args)

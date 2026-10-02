@@ -12,7 +12,10 @@ class OresEndpointController < ApplicationController
   private
 
   def dispatch_ores_endpoint
-    path_params = request.path_parameters.to_h.reject { |key, _| %w[controller action].include?(key.to_s) }
+    route_middleware = request.path_parameters[:ores_middleware] || request.path_parameters["ores_middleware"] || OresApp::Routes::DEFAULT_MIDDLEWARE
+    path_params = request.path_parameters.to_h.reject do |key, _|
+      %w[controller action ores_middleware].include?(key.to_s)
+    end
 
     result = OresApp::Dispatcher.call_direct(
       {
@@ -26,7 +29,8 @@ class OresEndpointController < ApplicationController
         "path_params" => path_params
       },
       controller_path: self.class.controller_path,
-      action: action_name
+      action: action_name,
+      middleware: route_middleware
     )
 
     result.fetch("headers", {}).each do |name, value|
