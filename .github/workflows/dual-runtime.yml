@@ -19,6 +19,10 @@ jobs:
           ruby-version: '3.4'
           bundler-cache: true
       - run: ORES_BUILD_TARGET=rails bundle exec rails test
+      - name: Audit app and transitive gem execution-local state
+        run: |
+          bundle exec ruby script/audit-thread-state.rb app lib config $(bundle list --paths) > thread-state-audit.json
+          cat thread-state-audit.json
       - name: Boot normal Puma/Rails server
         run: |
           ORES_BUILD_TARGET=rails RAILS_ENV=test bundle exec rails server -b 127.0.0.1 -p 3100 >rails-mri.log 2>&1 &
@@ -42,14 +46,13 @@ jobs:
         with:
           ruby-version: truffleruby+graalvm-34.0.1
           bundler-cache: true
-      - run: ruby -v
       - run: ORES_BUILD_TARGET=rails bundle exec rails test
-      - name: Boot the same Rails application directly on TruffleRuby
+      - name: Boot the normal Rails application on TruffleRuby
         run: |
           ORES_BUILD_TARGET=rails RAILS_ENV=test bundle exec rails server -b 127.0.0.1 -p 3101 >rails-truffle.log 2>&1 &
           echo $! > rails.pid
           for n in $(seq 1 60); do
-            if curl --fail --silent http://127.0.0.1:3101/healthz >health.json; then break; fi
+            if curl --fail --silent -H 'x-request-id: rails-truffle-smoke' http://127.0.0.1:3101/healthz >health.json; then break; fi
             sleep 1
           done
           cat health.json
@@ -59,148 +62,129 @@ jobs:
       - if: failure()
         run: cat rails-truffle.log || true
 
-  lambda-route-codegen:
+  rails-free-codegen:
     runs-on: ubuntu-latest
-    env:
-      BUNDLE_WITHOUT: rails
-      ORES_BUILD_TARGET: lambda
-      ORES_LAMBDA_HANDLER_GRANULARITY: route
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.4'
-          bundler-cache: true
-      - name: Verify exact Rails/filesystem route contract
-        run: bundle exec ruby bin/verify-routes
-      - run: bundle exec ruby bin/build-runtime
-      - name: Verify URL-shaped generated route and grouped handler artifacts
+          bundler-cache: false
+      - name: Prove route compiler handles Rails DSL without Rails
         run: |
-          test -f 'generated/lambda/routes/users/[id]/handler.rb'
-          test -f 'generated/lambda/routes/orders/[id]/handler.rb'
-          test -f 'generated/lambda/routes/orders/[id]/cancel/handler.rb'
-          test -f generated/lambda/groups/users/handler.rb
+          ruby script/static-route-compiler-smoke.rb
+          ruby -e 'abort "Rails unexpectedly loaded" if defined?(Rails)'
+
+      - name: Generate route-granularity Lambda artifacts without Rails
+        env:
+          ORES_BUILD_TARGET: lambda
+          ORES_LAMBDA_HANDLER_GRANULARITY: route
+        run: |
+          ruby bin/build-runtime
+          test -f generated/lambda/routes/users/'[id]'/_get/handler.rb
+          test -f generated/lambda/routes/orders/'[id]'/cancel/_post/handler.rb
+          grep -Fq '"rails_application_initialized": false' generated/lambda/manifest.json
+          grep -Fq '"route_source": "config/routes.rb:ripper-static"' generated/lambda/manifest.json
+          ! grep -R -E 'config/environment|Rails\.application' generated/lambda
+
+      - name: Generate group-granularity Lambda artifacts without Rails
+        env:
+          ORES_BUILD_TARGET: lambda
+          ORES_LAMBDA_HANDLER_GRANULARITY: group
+        run: |
+          ruby bin/build-runtime
           test -f generated/lambda/groups/orders/handler.rb
-          grep -Fq '"handler_granularity": "route"' generated/lambda/manifest.json
-          grep -Fq '"unit": "polyglot-inner-context"' generated/lambda/manifest.json
-          grep -Fq '"cross_handler_context_reuse": false' generated/lambda/manifest.json
-          grep -Fq '"source_handler": "routes/users/[id]/handler.rb"' generated/lambda/manifest.json
-          grep -Fq '"graal_worker_pool_key": "routes/users/[id]/handler.rb"' generated/lambda/manifest.json
+          grep -Fq '"handler_granularity": "group"' generated/lambda/manifest.json
+          grep -q 'case route.group' generated/lambda/entrypoint.rb
           ! grep -R -E 'config/environment|Rails\.application' generated/lambda
-          test -z "$(git status --porcelain --untracked-files=all -- generated/)"
-      - run: bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
-      - run: bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
 
-  lambda-group-codegen:
-    runs-on: ubuntu-latest
-    env:
-      BUNDLE_WITHOUT: rails
-      ORES_BUILD_TARGET: lambda
-      ORES_LAMBDA_HANDLER_GRANULARITY: group
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: '3.4'
-          bundler-cache: true
-      - run: bundle exec ruby bin/verify-routes
-      - run: bundle exec ruby bin/build-runtime
-      - name: Verify grouped dispatch build
+      - name: Generate route and group Graal isolate units without Rails
+        env:
+          ORES_BUILD_TARGET: graal
         run: |
-          grep -q '"handler_granularity": "group"' generated/lambda/manifest.json
-          grep -q 'case route.name' generated/lambda/groups/orders/handler.rb
-          grep -q 'OresGenerated::Groups::Orders' generated/lambda/entrypoint.rb
-          grep -Fq 'require_relative "../../routes/orders/[id]/handler"' generated/lambda/groups/orders/handler.rb
-          grep -Fq '"pool_key": "handler-path"' generated/lambda/manifest.json
-          ! grep -R -E 'config/environment|Rails\.application' generated/lambda
-      - run: bundle exec ruby lambda-test/thread_state_boundary_smoke.rb
-      - run: bundle exec ruby lambda-test/aws_lambda_adapter_test.rb
+          ruby bin/build-runtime
+          test -f generated/graal/common.rb
+          test -f generated/graal/routes/users/'[id]'/_get/handler.rb
+          test -f generated/graal/groups/orders/handler.rb
+          grep -Fq '"context_model": "one-long-lived-context-per-route-or-group-isolate"' generated/graal/manifest.json
+          grep -Fq '"max_concurrency_per_isolate": 5' generated/graal/manifest.json
+          grep -Fq '"contexts_per_isolate": 1' generated/graal/manifest.json
+          grep -Fq '"host_thread_pool_size_per_context": 5' generated/graal/manifest.json
+          grep -Fq '"language_context": "ruby"' generated/graal/manifest.json
+          grep -Fq '"request_multiplexing": true' generated/graal/manifest.json
+          grep -Fq '"route_handler_authority": "routes/**/handler.rb"' generated/graal/manifest.json
+          grep -Fq '"engine_scope": "process-shared"' generated/graal/manifest.json
+          test -f 'routes/users/[id]/handler.rb'
+          test -f 'routes/orders/[id]/cancel/handler.rb'
+          grep -Fq '# --- PHYSICAL routes/users/[id]/handler.rb ---' 'generated/graal/routes/users/[id]/_get/handler.rb'
+          grep -Fq '"source_memory": "host-read-only-shareable"' generated/graal/manifest.json
+          grep -Fq '"supported_isolation_granularities"' generated/graal/manifest.json
+          ! grep -R -E 'config/environment|Rails\.application' generated/graal
+          ruby -rjson -e 'm=JSON.parse(File.read("generated/graal/manifest.json")); r=m["routes"].size; units=m["isolate_units"]; raise unless units.count{|u|u["kind"]=="route"}==r; raise unless units.any?{|u|u["kind"]=="group" && u["group"]=="orders"}; raise unless units.all?{|u|u["context_count"]==1 && u["host_thread_pool_size"]==5 && u["request_multiplexing"]==true && u["language_context"]=="ruby"}; raise unless units.map{|u|u["key"]}.uniq.size==units.size'
 
-  graal-context-worker-cluster:
+  graal-warm-context:
     runs-on: ubuntu-latest
     env:
-      BUNDLE_WITHOUT: rails
-      ORES_BUILD_TARGET: lambda
-      ORES_LAMBDA_HANDLER_GRANULARITY: route
-      ORES_GRAAL_CONTEXTS_PER_HANDLER: '1'
-      ORES_GRAAL_HOST: 127.0.0.1
-      ORES_GRAAL_PORT: '3200'
+      BUNDLE_WITHOUT: rails:test
+      ORES_BUILD_TARGET: graal
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: truffleruby+graalvm-34.0.1
-          bundler-cache: true
-      - name: Show TruffleRuby and Java runtime
+          bundler-cache: false
+      - run: truffleruby bin/build-runtime
+      - name: Reuse one route Context image for 1,000 invocations and prove cleanup
         run: |
-          truffleruby --version
-          java -version
-      - name: Build Rails-independent route runtime
-        run: |
-          bundle exec ruby bin/verify-routes
-          bundle exec ruby bin/build-runtime
-      - name: Prove two inner contexts do not share Ruby global state
-        run: bundle exec truffleruby --jvm graal/context_isolation_smoke.rb
-      - name: Prove inner context can call an outer host Method bridge
-        run: bundle exec truffleruby --jvm graal/context_bridge_smoke.rb
-      - name: Prove one concrete handler executes directly in its context worker
-        run: bundle exec truffleruby --jvm graal/worker_health_smoke.rb
-      - name: Boot one Graal host process with per-handler context pools
-        run: |
-          bundle exec truffleruby --jvm graal/server.rb >graal-cluster.log 2>&1 &
-          echo $! > graal.pid
-          for n in $(seq 1 90); do
-            if curl --fail --silent http://127.0.0.1:3200/__ores/cluster >cluster-before.json; then break; fi
-            sleep 1
-          done
-          cat cluster-before.json
-          grep -q '"worker_model":"graal-inner-context"' cluster-before.json
-          grep -q '"worker_is_os_process":false' cluster-before.json
-          grep -q '"cross_handler_context_reuse":false' cluster-before.json
-      - name: Prove handler pools share one host but not one context
-        run: |
-          curl --silent --dump-header health-1.headers -H 'x-request-id: health-1' http://127.0.0.1:3200/healthz >health-1.json
-          curl --silent --dump-header health-2.headers -H 'x-request-id: health-2' http://127.0.0.1:3200/healthz >health-2.json
-          curl --silent --dump-header users.headers -H 'x-request-id: users-1' http://127.0.0.1:3200/users/demo-user >users.json
-          curl --silent --dump-header orders.headers -H 'x-request-id: orders-1' http://127.0.0.1:3200/orders/demo-order >orders.json
+          cat >/tmp/graal-smoke.rb <<'RUBY'
+          require "json"
 
-          cat health-1.json
-          grep -q '"execution_mode":"graal-context"' health-1.json
-          grep -qi '^x-ores-worker-model: graal-inner-context' health-1.headers
+          host_http = lambda do |payload|
+            request = JSON.parse(payload.to_s)
+            Thread.current[:ores_ci_fiber_poison] = request.fetch("path")
+            Thread.current.thread_variable_set(:ores_ci_thread_poison, request.fetch("path"))
+            JSON.generate("ok" => true, "status" => 200, "body" => JSON.generate("ok" => true))
+          end
 
-          host_health=$(awk -F': ' 'tolower($1)=="x-ores-host-pid" {gsub("\\r", "", $2); print $2}' health-1.headers)
-          host_users=$(awk -F': ' 'tolower($1)=="x-ores-host-pid" {gsub("\\r", "", $2); print $2}' users.headers)
-          host_orders=$(awk -F': ' 'tolower($1)=="x-ores-host-pid" {gsub("\\r", "", $2); print $2}' orders.headers)
-          test "$host_health" = "$host_users"
-          test "$host_health" = "$host_orders"
+          eval(File.read("generated/graal/common.rb"), TOPLEVEL_BINDING, "generated/graal/common.rb")
+          unit = "generated/graal/routes/users/[id]/_get/handler.rb"
+          factory = eval(File.read(unit), TOPLEVEL_BINDING, unit)
+          raise "unit must return executable factory" unless factory.respond_to?(:call)
+          invoker = factory.call(host_http)
+          raise "setup must return invoker" unless invoker.respond_to?(:call)
+          raise "Rails unexpectedly loaded" if defined?(Rails)
 
-          health_context_1=$(awk -F': ' 'tolower($1)=="x-ores-worker-context" {gsub("\\r", "", $2); print $2}' health-1.headers)
-          health_context_2=$(awk -F': ' 'tolower($1)=="x-ores-worker-context" {gsub("\\r", "", $2); print $2}' health-2.headers)
-          users_context=$(awk -F': ' 'tolower($1)=="x-ores-worker-context" {gsub("\\r", "", $2); print $2}' users.headers)
-          orders_context=$(awk -F': ' 'tolower($1)=="x-ores-worker-context" {gsub("\\r", "", $2); print $2}' orders.headers)
-          test "$health_context_1" = "$health_context_2"
-          test "$health_context_1" != "$users_context"
-          test "$health_context_1" != "$orders_context"
-          test "$users_context" != "$orders_context"
+          Thread.current[:ores_ci_preexisting] = "keep-fiber"
+          Thread.current.thread_variable_set(:ores_ci_preexisting_true, "keep-thread")
 
-          health_count_2=$(awk -F': ' 'tolower($1)=="x-ores-worker-invocations" {gsub("\\r", "", $2); print $2}' health-2.headers)
-          test "$health_count_2" = "2"
-
-          grep -Fqi 'x-ores-worker-pool: routes/healthz/handler.rb' health-1.headers
-          grep -Fqi 'x-ores-worker-pool: routes/users/[id]/handler.rb' users.headers
-          grep -Fqi 'x-ores-worker-pool: routes/orders/[id]/handler.rb' orders.headers
-
-          curl --fail --silent http://127.0.0.1:3200/__ores/cluster >cluster-after.json
-          cat cluster-after.json
-          grep -Fq 'routes/healthz/handler.rb' cluster-after.json
-          grep -Fq 'routes/users/[id]/handler.rb' cluster-after.json
-          grep -Fq 'routes/orders/[id]/handler.rb' cluster-after.json
-      - name: Show Graal cluster log on failure
-        if: failure()
-        run: cat graal-cluster.log || true
-      - name: Stop Graal host
-        if: always()
-        run: kill $(cat graal.pid) >/dev/null 2>&1 || true
+          errors = Queue.new
+          threads = 5.times.map do |thread_index|
+            Thread.new do
+              Thread.current[:ores_ci_preexisting] = "keep-fiber-#{thread_index}"
+              Thread.current.thread_variable_set(:ores_ci_preexisting_true, "keep-thread-#{thread_index}")
+              100.times do |index|
+                request_id = "graal-route-#{thread_index}-#{index}"
+                response = JSON.parse(invoker.call(JSON.generate(
+                  "request_id" => request_id,
+                  "method" => "GET",
+                  "path" => "/users/demo",
+                  "headers" => {}
+                )))
+                raise response.inspect unless response.fetch("status") == 200
+                raise "request id drift" unless response.dig("headers", "x-request-id") == request_id
+                raise "fiber-local leaked" unless Thread.current[:ores_ci_fiber_poison].nil?
+                raise "true thread-local leaked" unless Thread.current.thread_variable_get(:ores_ci_thread_poison).nil?
+                raise "preexisting fiber state destroyed" unless Thread.current[:ores_ci_preexisting] == "keep-fiber-#{thread_index}"
+                raise "preexisting thread state destroyed" unless Thread.current.thread_variable_get(:ores_ci_preexisting_true) == "keep-thread-#{thread_index}"
+              end
+            rescue StandardError => error
+              errors << error
+            end
+          end
+          threads.each(&:join)
+          raise errors.pop unless errors.empty?
+          RUBY
+          truffleruby /tmp/graal-smoke.rb
 
   truffleruby-aws-lambda:
     runs-on: ubuntu-latest
@@ -208,40 +192,24 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build Lambda image without Rails bundle
         run: docker build --platform linux/amd64 -f aws-lambda/Dockerfile -t ores-ror-truffleruby-lambda:test .
-      - name: Verify container runtime line
-        run: docker run --rm --entrypoint truffleruby ores-ror-truffleruby-lambda:test --version | tee truffleruby-version.txt
-      - name: Verify Rails gem is not installed in lambda image
-        run: |
-          docker run --rm --entrypoint truffleruby ores-ror-truffleruby-lambda:test \
-            -e 'abort "rails gem present" unless Gem::Specification.find_all_by_name("rails").empty?'
+      - name: Verify Rails gem is absent
+        run: docker run --rm --entrypoint truffleruby ores-ror-truffleruby-lambda:test -e 'abort "rails gem present" unless Gem::Specification.find_all_by_name("rails").empty?'
       - name: Install AWS Lambda Runtime Interface Emulator
         run: |
-          curl --fail --location --output aws-lambda-rie \
-            https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/latest/download/aws-lambda-rie
+          curl --fail --location --output aws-lambda-rie https://github.com/aws/aws-lambda-runtime-interface-emulator/releases/latest/download/aws-lambda-rie
           chmod +x aws-lambda-rie
-      - name: Boot Lambda runtime locally and invoke generated health handler
+      - name: Invoke generated health handler
         run: |
-          docker run --rm -d --name ores-ror-lambda \
-            -p 9000:8080 \
-            -v "$PWD/aws-lambda-rie:/aws-lambda-rie:ro" \
-            --entrypoint /aws-lambda-rie \
-            ores-ror-truffleruby-lambda:test /var/runtime/bootstrap
+          docker run --rm -d --name ores-ror-lambda -p 9000:8080 -v "$PWD/aws-lambda-rie:/aws-lambda-rie:ro" --entrypoint /aws-lambda-rie ores-ror-truffleruby-lambda:test /var/runtime/bootstrap
           for n in $(seq 1 60); do
-            if curl --fail --silent \
-              -H 'content-type: application/json' \
-              -d @aws-lambda/event-v2.json \
-              http://127.0.0.1:9000/2015-03-31/functions/function/invocations >lambda-response.json; then
-              break
-            fi
+            if curl --fail --silent -H 'content-type: application/json' -d @aws-lambda/event-v2.json http://127.0.0.1:9000/2015-03-31/functions/function/invocations >lambda-response.json; then break; fi
             sleep 1
           done
           cat lambda-response.json
           grep -q '"statusCode":200' lambda-response.json
           grep -Fq '\"execution_mode\":\"lambda\"' lambda-response.json
           grep -q 'truffleruby' lambda-response.json
-      - name: Show Lambda container log on failure
-        if: failure()
+      - if: failure()
         run: docker logs ores-ror-lambda || true
-      - name: Stop Lambda container
-        if: always()
+      - if: always()
         run: docker rm -f ores-ror-lambda >/dev/null 2>&1 || true

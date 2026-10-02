@@ -1,12 +1,11 @@
 # frozen_string_literal: true
 
 module OresApp
-  module RouteHandlers
+  module PhysicalRouteHandlers
     module CancelOrder
       module_function
-
       def call(request)
-        Handlers.call("cancel_order", request)
+        OresApp::Handlers.call("orders/cancel/endpoint", "cancel", request)
       end
     end
   end

@@ -1,12 +1,11 @@
 # frozen_string_literal: true
 
 module OresApp
-  module RouteHandlers
-    module Sessions
+  module PhysicalRouteHandlers
+    module CreateSession
       module_function
-
       def call(request)
-        Handlers.call("create_session", request)
+        OresApp::Handlers.call("sessions/create/endpoint", "create", request)
       end
     end
   end

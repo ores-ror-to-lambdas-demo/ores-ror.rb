@@ -1,12 +1,11 @@
 # frozen_string_literal: true
 
 module OresApp
-  module RouteHandlers
+  module PhysicalRouteHandlers
     module Recommendations
       module_function
-
       def call(request)
-        Handlers.call("recommendations", request)
+        OresApp::Handlers.call("recommendations/show/endpoint", "show", request)
       end
     end
   end

@@ -1,57 +1,42 @@
 # frozen_string_literal: true
 
+require "json"
+require "uri"
+
 module OresApp
   class HttpDatabase
     class Error < StandardError; end
 
-    GRAAL_RUNTIME = (defined?(ORES_GRAAL_RUNTIME) && ORES_GRAAL_RUNTIME) ||
-                    (defined?(ORES_GRAAL_WORKER) && ORES_GRAAL_WORKER)
+    GRAAL_RUNTIME = defined?(ORES_GRAAL_RUNTIME) && ORES_GRAAL_RUNTIME
 
     def self.runtime_name
-      return "truffleruby-graal-context" if defined?(ORES_GRAAL_WORKER) && ORES_GRAAL_WORKER
-
-      GRAAL_RUNTIME ? "truffleruby-graal-lambda" : RUBY_ENGINE
+      GRAAL_RUNTIME ? "truffleruby-graal" : RUBY_ENGINE
     end
 
-    if GRAAL_RUNTIME
-      class GraalTransport
-        def self.request(method, path, body:, query:)
-          bridge = if defined?(ORES_GS_HTTP)
-                     ORES_GS_HTTP
-                   elsif defined?($ores_gs_http) && $ores_gs_http
-                     $ores_gs_http
-                   end
-          raise Error, "Graal host HTTP bridge is unavailable" unless bridge
+    class GraalTransport
+      def self.request(method, path, body:, query:)
+        raise Error, "Graal host HTTP bridge is unavailable" unless defined?(ORES_GS_HTTP)
 
-          request_wire = Marshal.dump({
-            "method" => method.to_s.upcase,
-            "path" => path.to_s,
-            "query" => query || {},
-            "body" => body
-          }).unpack1("H*")
+        raw = ORES_GS_HTTP.call(JSON.generate({
+          method: method.to_s.upcase,
+          path: path,
+          query: query || {},
+          body: body
+        }))
+        response = JSON.parse(raw.to_s)
+        raise Error, response.fetch("error", "host HTTP bridge failed") unless response["ok"]
 
-          foreign_wire = bridge.call(request_wire)
-          response_wire = "#{foreign_wire}"
-          response = Marshal.load([response_wire].pack("H*"))
-          raise Error, response.fetch("error", "host HTTP bridge failed") unless response["ok"]
-
-          {
-            status: Integer(response.fetch("status")),
-            body: response.fetch("body", {})
-          }
-        rescue TypeError, ArgumentError => error
-          raise Error, "invalid Graal host bridge response: #{error.message}"
-        end
+        body_text = response.fetch("body", "")
+        parsed = body_text.empty? ? {} : JSON.parse(body_text)
+        { status: Integer(response.fetch("status")), body: parsed }
+      rescue JSON::ParserError => error
+        raise Error, "data API returned invalid JSON: #{error.message}"
       end
+    end
 
-      def self.request(method, path, body: nil, query: {})
-        GraalTransport.request(method, path, body: body, query: query)
-      end
-    else
+    unless GRAAL_RUNTIME
       require "connection_pool"
-      require "json"
       require "net/http"
-      require "uri"
 
       class Session
         def initialize(base_url:, token:)
@@ -119,7 +104,13 @@ module OresApp
       POOL = ConnectionPool.new(size: POOL_SIZE, timeout: 2.0) do
         Session.new(base_url: BASE_URL, token: TOKEN)
       end
+    end
 
+    if GRAAL_RUNTIME
+      def self.request(method, path, body: nil, query: {})
+        GraalTransport.request(method, path, body: body, query: query)
+      end
+    else
       def self.request(method, path, body: nil, query: {})
         POOL.with { |session| session.request(method, path, body: body, query: query) }
       rescue ConnectionPool::TimeoutError
