@@ -1,5 +1,4 @@
 # frozen_string_literal: true
-# ores-route: GET /recommendations/:id action=show
 
 module Recommendations
   module Show
