@@ -1,5 +1,4 @@
 # frozen_string_literal: true
-# ores-route: GET /profiles/:id/preferences action=show
 
 module Profiles
   module Preferences
