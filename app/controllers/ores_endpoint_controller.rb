@@ -7,11 +7,30 @@ require_relative "../../lib/ores_app/handlers"
 require_relative "../../lib/ores_app/middleware"
 require_relative "../../lib/ores_app/routes"
 require_relative "../../lib/ores_app/view_runtime"
+require_relative "../../lib/ores_rails/puma_io_bound"
 
 module OresEndpointBehavior
   module ClassMethods
     def call_ores_action(action, request)
       OresApp::ControllerRuntime.call(self, action, request)
+    end
+
+    # Current application endpoints are data-API-backed by default. Individual
+    # controllers can opt out (for example /healthz) without coupling generated
+    # Lambda/Graal code to Puma.
+    def ores_puma_io_bound?
+      return @ores_puma_io_bound if instance_variable_defined?(:@ores_puma_io_bound)
+      return superclass.ores_puma_io_bound? if superclass.respond_to?(:ores_puma_io_bound?)
+
+      true
+    end
+
+    def ores_io_bound!
+      @ores_puma_io_bound = true
+    end
+
+    def ores_cpu_bound!
+      @ores_puma_io_bound = false
     end
 
     def controller_path
@@ -99,9 +118,15 @@ if defined?(Rails)
     include OresEndpointBehavior
 
     skip_forgery_protection
+    around_action :run_ores_puma_io_classification
     around_action :run_ores_route_middleware
 
     private
+
+    def run_ores_puma_io_classification
+      OresRails::PumaIoBound.mark!(request, enabled: self.class.ores_puma_io_bound?)
+      yield
+    end
 
     def run_ores_route_middleware
       middleware_request = ores_request_envelope

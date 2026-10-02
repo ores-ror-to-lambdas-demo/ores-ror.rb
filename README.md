@@ -12,7 +12,7 @@ Normal Rails mode is a normal Rails application:
 ORES_BUILD_TARGET=rails bundle exec rails server
 ```
 
-It uses the Rails router, controllers, callbacks, models, Action View, initializers, and Puma normally. Production Puma defaults to a bounded 50–300 thread pool and can be tuned with `RAILS_MIN_THREADS` / `RAILS_MAX_THREADS`.
+It uses the Rails router, controllers, callbacks, models, Action View, initializers, and Puma normally. Production Puma uses a bounded adaptive pool: 30 warm threads, up to 40 regular request threads, with I/O-bound headroom to a hard default ceiling of 50.
 
 Lambda and Graal are compilation/runtime targets derived from the Rails source tree. They do **not** boot `Rails.application`, Action Controller, Action View, Puma, or Rails initializers.
 
@@ -142,7 +142,7 @@ The generated runtime uses a small plain-Ruby request/response/controller compat
 
 The two execution modes intentionally have different hosting models:
 
-- **Rails/Puma:** normal Rails server execution with a bounded worker-thread pool; production defaults are 50 minimum / 300 maximum threads.
+- **Rails/Puma:** normal Rails server execution with a bounded adaptive pool: 30 warm threads, 40 regular capacity, and I/O-bound headroom up to 50 total request-processing threads.
 - **Graal:** one long-lived TruffleRuby `Context` per route or route-group isolate, with execution multiplexed over one bounded process-wide host thread pool shared by all isolates; each isolate separately admits at most 5 concurrent entries.
 - **Lambda:** normal Lambda execution-environment concurrency around generated Rails-free Ruby.
 
@@ -191,3 +191,23 @@ CI verifies:
 - symlink/path/output trust-boundary failures are rejected.
 
 The purpose of the demo is not to replace Rails semantics in Rails mode. It is to preserve normal Rails as the authoring/runtime baseline while producing explicit, testable Rails-free execution artifacts for Lambda and Graal.
+
+
+## Rails adaptive concurrency
+
+Rails server mode runs directly under Puma 8. The default process-level request concurrency model is intentionally bounded:
+
+- 30 warm reusable request threads;
+- ordinary demand may grow the regular pool to 40;
+- Rails data-backed requests are classified as I/O-bound before controller execution;
+- Puma may create up to 10 additional I/O processor threads while those requests wait, for a hard default ceiling of 50 request-processing threads;
+- excess threads are reclaimed when demand falls;
+- `fiber_per_request` gives each request a clean Fiber so fiber-local state cannot leak when a worker thread is reused.
+
+This is a **reused thread pool**, not a newly spawned thread for every request. An in-flight synchronous Rack request still occupies one pooled Puma processor thread; the I/O classification makes Puma replace I/O-waiting capacity instead of allowing slow HTTP calls to consume all regular request capacity. The Data API connection pool defaults to the same 50-request ceiling and uses persistent keep-alive sessions with bounded connect/read/write timeouts and no hidden Net::HTTP retries.
+
+Run Puma directly so the Puma 8 concurrency contract is active:
+
+```sh
+ORES_BUILD_TARGET=rails bundle exec puma -C config/puma.rb config.ru
+```

@@ -3,6 +3,8 @@
 module Healthz
   module Show
     class EndpointController < OresEndpointController
+      ores_cpu_bound!
+
       def show
         dispatch_ores_endpoint
       end

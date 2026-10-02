@@ -22,13 +22,15 @@ jobs:
           ruby-version: '3.4'
           bundler-cache: true
       - run: ORES_BUILD_TARGET=rails bundle exec rails test
+      - name: Audit Puma 8 adaptive concurrency
+        run: bundle exec ruby script/audit-puma-concurrency.rb
       - name: Audit app and transitive gem execution-local state
         run: |
           bundle exec ruby script/audit-thread-state.rb app lib config $(bundle list --paths) > thread-state-audit.json
           cat thread-state-audit.json
       - name: Boot normal Puma/Rails server
         run: |
-          ORES_BUILD_TARGET=rails RAILS_ENV=test bundle exec rails server -b 127.0.0.1 -p 3100 >rails-mri.log 2>&1 &
+          ORES_BUILD_TARGET=rails RAILS_ENV=test PORT=3100 bundle exec puma -C config/puma.rb config.ru >rails-mri.log 2>&1 &
           echo $! > rails.pid
           for n in $(seq 1 45); do
             if curl --fail --silent -D health.headers -H 'accept: application/json' -H 'x-request-id: rails-mri-smoke' http://127.0.0.1:3100/healthz >health.json; then break; fi
@@ -54,9 +56,11 @@ jobs:
           ruby-version: truffleruby+graalvm-34.0.1
           bundler-cache: true
       - run: ORES_BUILD_TARGET=rails bundle exec rails test
+      - name: Audit Puma 8 adaptive concurrency
+        run: bundle exec truffleruby script/audit-puma-concurrency.rb
       - name: Boot the normal Rails application on TruffleRuby
         run: |
-          ORES_BUILD_TARGET=rails RAILS_ENV=test bundle exec rails server -b 127.0.0.1 -p 3101 >rails-truffle.log 2>&1 &
+          ORES_BUILD_TARGET=rails RAILS_ENV=test PORT=3101 bundle exec puma -C config/puma.rb config.ru >rails-truffle.log 2>&1 &
           echo $! > rails.pid
           for n in $(seq 1 60); do
             if curl --fail --silent -D health.headers -H 'accept: application/json' -H 'x-request-id: rails-truffle-smoke' http://127.0.0.1:3101/healthz >health.json; then break; fi
