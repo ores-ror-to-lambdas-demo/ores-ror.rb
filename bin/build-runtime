@@ -48,57 +48,89 @@ def group_unit_relative(group, prefix: "groups")
   File.join(prefix, safe, "handler.rb")
 end
 
-def physical_route_relative(route)
-  segments = route.fetch(:path).split("/").reject(&:empty?).map { |segment| fs_segment(segment) }
-  segments = ["_root"] if segments.empty?
-  File.join("routes", *segments, "handler.rb")
+GENERATED_HANDLER_MARKER = "GENERATED ORES RAILS-FREE HANDLER. DO NOT EDIT OR COMMIT."
+
+def endpoint_handler_relative(route)
+  controller_file = route.fetch(:controller_file)
+  unless File.basename(controller_file) == "endpoint_controller.rb"
+    abort "Lambda/Graal endpoint must use a dedicated endpoint_controller.rb directory: #{controller_file}"
+  end
+  File.join(File.dirname(controller_file), "handler.rb")
 end
 
-def physical_group_relative(group)
-  safe = group.to_s.gsub(/[^A-Za-z0-9._-]+/, "-")
-  File.join("routes", safe, "handler.rb")
+def endpoint_handler_const(route)
+  relative_dir = Pathname(File.dirname(route.fetch(:controller_file))).relative_path_from(Pathname("app/controllers"))
+  modules = relative_dir.each_filename.map { |part| ruby_const(part) }
+  abort "endpoint controller must live below app/controllers/<endpoint>/" if modules.empty?
+  (modules + ["Handler"]).join("::")
 end
 
-def physical_route_const(route)
-  ruby_const(route.fetch(:name))
+def endpoint_action_portable!(route)
+  source = File.read(File.join(ROOT, route.fetch(:controller_file)))
+  action = Regexp.escape(route.fetch(:action))
+  pattern = /def\s+#{action}\b[^\n]*\n\s*dispatch_ores_endpoint\s*\n\s*end\b/m
+  return true if source.match?(pattern)
+
+  abort "Rails endpoint #{route.fetch(:controller)}##{route.fetch(:action)} is not a portable dispatch_ores_endpoint action; refusing semantic drift"
 end
 
-FORBIDDEN_HANDLER_SOURCE = {
-  /\brequire(?:_relative)?\b/ => "dynamic require",
-  /\b(?:File|Dir|IO)\s*\./ => "filesystem API",
-  /\b(?:Process\.|system\s*\(|exec\s*\(|spawn\s*\(|fork\b)/ => "process API",
-  /\b(?:Socket|TCPSocket|UDPSocket|UNIXSocket)\b/ => "raw socket API",
-  /\b(?:Fiddle|FFI)\b/ => "native FFI",
-  /\bThread\s*\.\s*(?:new|start|fork)\b/ => "guest-created thread"
-}.freeze
+def clean_generated_endpoint_handlers!
+  Dir.glob(File.join(ROOT, "app/controllers/**/handler.rb")).each do |path|
+    source = File.read(path)
+    abort "refusing to overwrite non-generated handler sidecar: #{path}" unless source.include?(GENERATED_HANDLER_MARKER)
+    FileUtils.rm_f(path)
+  end
+end
 
-def validate_physical_handlers!(routes)
-  route_sources = routes.map { |route| physical_route_relative(route) }
-  duplicates = route_sources.group_by(&:itself).select { |_path, rows| rows.length > 1 }.keys
-  abort "multiple Rails routes map to the same physical handler path: #{duplicates.join(", ")}" unless duplicates.empty?
+def prepare_endpoint_handlers!(routes)
+  clean_generated_endpoint_handlers!
 
-  missing = route_sources.reject { |relative| File.file?(File.join(ROOT, relative)) }
-  abort "missing committed physical route handlers: #{missing.join(", ")}" unless missing.empty?
-
-  route_sources.each do |relative|
-    source = File.read(File.join(ROOT, relative))
-    FORBIDDEN_HANDLER_SOURCE.each do |pattern, label|
-      abort "physical handler #{relative} uses forbidden #{label}" if source.match?(pattern)
-    end
+  routes.each do |route|
+    endpoint_action_portable!(route)
+    route[:handler_path] = endpoint_handler_relative(route)
+    route[:handler_constant] = endpoint_handler_const(route)
   end
 
-  group_sources = routes.map { |route| physical_group_relative(route.fetch(:group)) }.uniq.select do |relative|
-    File.file?(File.join(ROOT, relative))
+  collisions = routes.group_by { |route| route.fetch(:handler_path) }.select do |_path, rows|
+    rows.map { |route| [route.fetch(:controller), route.fetch(:action)] }.uniq.length > 1
   end
-  actual = Dir.glob(File.join(ROOT, "routes", "**", "handler.rb")).sort.map do |path|
-    Pathname(path).relative_path_from(Pathname(ROOT)).to_s
+  unless collisions.empty?
+    detail = collisions.map { |path, rows| "#{path}: #{rows.map { |r| "#{r[:controller]}##{r[:action]}" }.uniq.join(", ")}" }.join("; ")
+    abort "multiple Rails endpoints collide on one generated handler.rb: #{detail}"
   end
-  allowed = (route_sources + group_sources).uniq.sort
-  unexpected = actual - allowed
-  abort "unmapped physical handler files: #{unexpected.join(", ")}" unless unexpected.empty?
-  true
+
+  routes.group_by { |route| route.fetch(:handler_path) }.each_value do |rows|
+    route = rows.first
+    path = File.join(ROOT, route.fetch(:handler_path))
+    FileUtils.mkdir_p(File.dirname(path))
+    File.write(path, <<~RUBY)
+      # frozen_string_literal: true
+      # #{GENERATED_HANDLER_MARKER}
+      # Rails endpoint: #{route.fetch(:controller)}##{route.fetch(:action)}
+      # Rails source: #{route.fetch(:controller_file)}
+      # Rails view lookup: #{route.fetch(:view_logical_path)}
+
+      module #{route.fetch(:handler_constant).split("::")[0...-1].join("::")}
+        module Handler
+          CONTROLLER_PATH = #{route.fetch(:controller).inspect}.freeze
+          ACTION = #{route.fetch(:action).inspect}.freeze
+          VIEW_LOGICAL_PATH = #{route.fetch(:view_logical_path).inspect}.freeze
+          VIEW_FILES = #{route.fetch(:view_files).inspect}.freeze
+
+          module_function
+
+          def call(request)
+            OresApp::Handlers.call(CONTROLLER_PATH, ACTION, request)
+          end
+        end
+      end
+    RUBY
+  end
 end
 
+def handler_source(route)
+  flatten_ruby_source(File.join(ROOT, route.fetch(:handler_path)))
+end
 def route_row(route)
   "OresApp::Routes::Route.new(" \
     "verb: #{route.fetch(:verb).inspect}, " \
@@ -137,15 +169,15 @@ end
 def write_lambda_route_handler(path, route)
   FileUtils.mkdir_p(File.dirname(path))
   const = route_const(route)
-  physical = physical_route_relative(route)
-  physical_source = flatten_ruby_source(File.join(ROOT, physical))
+  sidecar = route.fetch(:handler_path)
+  sidecar_source = handler_source(route)
   File.write(path, <<~RUBY)
     # frozen_string_literal: true
     # GENERATED FILE. DO NOT EDIT OR COMMIT.
-    # Physical execution source: #{physical}
+    # Generated Rails endpoint sidecar: #{sidecar}
     require "ores_app/handlers"
 
-    #{physical_source}
+    #{sidecar_source}
 
     module OresGenerated
       module RouteHandlers
@@ -153,23 +185,25 @@ def write_lambda_route_handler(path, route)
           module_function
 
           def call(request)
-            OresApp::PhysicalRouteHandlers::#{physical_route_const(route)}.call(request)
+            ::#{route.fetch(:handler_constant)}.call(request)
           end
         end
       end
     end
   RUBY
 end
-
 def write_lambda_group_handler(path, group, routes)
   FileUtils.mkdir_p(File.dirname(path))
+  sidecars = routes.uniq { |route| route.fetch(:handler_path) }.map { |route| handler_source(route) }.join("\n")
   cases = routes.map do |route|
-    "when #{route_id(route).inspect} then OresApp::Handlers.call(#{route.fetch(:controller).inspect}, #{route.fetch(:action).inspect}, request)"
+    "when #{route_id(route).inspect} then ::#{route.fetch(:handler_constant)}.call(request)"
   end.join("\n            ")
   File.write(path, <<~RUBY)
     # frozen_string_literal: true
     # GENERATED FILE. DO NOT EDIT OR COMMIT.
     require "ores_app/handlers"
+
+    #{sidecars}
 
     module OresGenerated
       module GroupHandlers
@@ -188,7 +222,6 @@ def write_lambda_group_handler(path, group, routes)
     end
   RUBY
 end
-
 def write_lambda_entrypoint(routes, granularity)
   route_requires = routes.map do |route|
     relative = route_unit_relative(route)
@@ -288,7 +321,7 @@ end
 
 def graal_unit_source(routes)
   cases = routes.map do |route|
-    "when #{route_id(route).inspect} then OresApp::PhysicalRouteHandlers::#{physical_route_const(route)}.call(request)"
+    "when #{route_id(route).inspect} then ::#{route.fetch(:handler_constant)}.call(request)"
   end.join("\n          ")
 
   String.new(<<~RUBY)
@@ -322,10 +355,10 @@ def write_graal_unit(relative, routes)
   path = File.join(GRAAL_DIR, relative)
   FileUtils.mkdir_p(File.dirname(path))
   source = String.new("# frozen_string_literal: true\n# GENERATED FILE. DO NOT EDIT OR COMMIT.\n")
-  routes.each do |route|
-    physical = physical_route_relative(route)
-    source << "\n# --- PHYSICAL #{physical} ---\n"
-    source << flatten_ruby_source(File.join(ROOT, physical))
+  routes.uniq { |route| route.fetch(:handler_path) }.each do |route|
+    sidecar = route.fetch(:handler_path)
+    source << "\n# --- GENERATED SIDECAR #{sidecar} ---\n"
+    source << handler_source(route)
     source << "\n"
   end
   source << graal_unit_source(routes)
@@ -335,7 +368,6 @@ def write_graal_unit(relative, routes)
   File.write(path, source)
   path
 end
-
 def compile_routes
   OresBuild::StaticRoutes.new(ROOT).compile.each do |route|
     route[:route_id] = route_id(route)
@@ -360,7 +392,7 @@ when "lambda"
 
   routes = compile_routes
   abort "no statically resolvable application routes found" if routes.empty?
-  validate_physical_handlers!(routes)
+  prepare_endpoint_handlers!(routes)
   FileUtils.rm_rf(LAMBDA_DIR)
   FileUtils.mkdir_p(LAMBDA_DIR)
   write_generated_routes(File.join(LAMBDA_DIR, "routes.rb"), routes)
@@ -381,13 +413,13 @@ when "lambda"
     "rails_application_initialized" => false,
     "route_source" => "config/routes.rb:ripper-static",
     "rails_route_authority" => "config/routes.rb",
-    "route_handler_authority" => "routes/**/handler.rb",
+    "route_handler_authority" => "generated app/controllers/**/handler.rb sidecars",
     "router_runtime" => "generated-rails-route-contract",
     "middleware_runtime" => "shared-ruby-no-rails-app",
     "handler_granularity" => granularity,
     "routes" => routes.map do |route|
       route_manifest(route).merge(
-        source_handler: physical_route_relative(route),
+        source_handler: route.fetch(:handler_path),
         route_handler: "generated/lambda/#{route_unit_relative(route)}",
         group_handler: "generated/lambda/#{group_unit_relative(route.fetch(:group))}"
       )
@@ -399,7 +431,7 @@ when "graal"
   abort "Rails must not be loaded during Graal generation" if defined?(Rails)
   routes = compile_routes
   abort "no statically resolvable application routes found" if routes.empty?
-  validate_physical_handlers!(routes)
+  prepare_endpoint_handlers!(routes)
   FileUtils.rm_rf(GRAAL_DIR)
   write_graal_common
 
@@ -412,7 +444,7 @@ when "graal"
       "key" => "route:#{route_id(route)}",
       "route_ids" => [route_id(route)],
       "group" => route.fetch(:group),
-      "source_handler" => physical_route_relative(route),
+      "source_handler" => route.fetch(:handler_path),
       "sources" => ["generated/graal/common.rb", "generated/graal/#{relative}"],
       "language_context" => "ruby",
       "context_count" => 1,
@@ -429,7 +461,7 @@ when "graal"
       "key" => "group:#{group}",
       "route_ids" => grouped.map { |route| route_id(route) },
       "group" => group,
-      "source_handlers" => grouped.map { |route| physical_route_relative(route) },
+      "source_handlers" => grouped.map { |route| route.fetch(:handler_path) },
       "sources" => ["generated/graal/common.rb", "generated/graal/#{relative}"],
       "language_context" => "ruby",
       "context_count" => 1,
@@ -447,7 +479,7 @@ when "graal"
     "rails_application_initialized" => false,
     "route_source" => "config/routes.rb:ripper-static",
     "rails_route_authority" => "config/routes.rb",
-    "route_handler_authority" => "routes/**/handler.rb",
+    "route_handler_authority" => "generated app/controllers/**/handler.rb sidecars",
     "router_runtime" => "generated-rails-route-contract",
     "middleware_runtime" => "shared-ruby-no-rails-app",
     "engine_scope" => "process-shared",
