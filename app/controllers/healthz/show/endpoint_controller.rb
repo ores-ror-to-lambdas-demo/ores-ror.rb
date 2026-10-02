@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+# ores-route: GET /healthz action=show
 
 module Healthz
   module Show
