@@ -66,7 +66,11 @@ module OresApp
           req.body = JsonCodec.generate(body) if body
 
           response = @http.request(req)
-          parsed = response.body.to_s.empty? ? {} : JsonCodec.parse(response.body)
+          body_text = response.body.to_s
+          max_bytes = HttpDatabase.max_response_bytes
+          raise Error, "data API response exceeded #{max_bytes} bytes" if body_text.bytesize > max_bytes
+
+          parsed = body_text.empty? ? {} : JsonCodec.parse(body_text)
           { status: response.code.to_i, body: parsed }
         rescue IOError, EOFError, SystemCallError
           reconnect!
@@ -93,17 +97,37 @@ module OresApp
           @http.use_ssl = @base.scheme == "https"
           @http.open_timeout = Float(ENV.fetch("DATA_API_CONNECT_TIMEOUT", "2.0"))
           @http.read_timeout = Float(ENV.fetch("DATA_API_READ_TIMEOUT", "10.0"))
+          @http.write_timeout = Float(ENV.fetch("DATA_API_WRITE_TIMEOUT", "10.0")) if @http.respond_to?(:write_timeout=)
           @http.keep_alive_timeout = Integer(ENV.fetch("DATA_API_KEEPALIVE_SECONDS", "30"))
+          @http.max_retries = 0 if @http.respond_to?(:max_retries=)
           @http.start
         end
       end
 
       BASE_URL = ENV.fetch("DATA_API_URL", "http://127.0.0.1:8787/v1")
       TOKEN = ENV.fetch("DATA_API_TOKEN", "")
-      POOL_SIZE = [Integer(ENV.fetch("DATA_API_HTTP_POOL_SIZE", "5")), 20].min
-      POOL = ConnectionPool.new(size: POOL_SIZE, timeout: 2.0) do
+
+      # Rails can have up to 50 request-processing threads by default. Keep the
+      # HTTP pool at the same ceiling so the data layer cannot become an
+      # accidental 20-connection bottleneck. Rails-free runtimes retain a small
+      # default because Lambda/Graal own concurrency differently.
+      default_pool_size = defined?(Rails) ? Integer(ENV.fetch("RAILS_MAX_THREADS", "50")) : 5
+      POOL_SIZE = Integer(ENV.fetch("DATA_API_HTTP_POOL_SIZE", default_pool_size.to_s))
+      raise Error, "DATA_API_HTTP_POOL_SIZE must be between 1 and 50" unless POOL_SIZE.between?(1, 50)
+
+      POOL_TIMEOUT = Float(ENV.fetch("DATA_API_POOL_TIMEOUT", "2.0"))
+      MAX_RESPONSE_BYTES = Integer(ENV.fetch("DATA_API_MAX_RESPONSE_BYTES", (1024 * 1024).to_s))
+      raise Error, "DATA_API_MAX_RESPONSE_BYTES must be >= 1" if MAX_RESPONSE_BYTES < 1
+
+      POOL = ConnectionPool.new(size: POOL_SIZE, timeout: POOL_TIMEOUT) do
         Session.new(base_url: BASE_URL, token: TOKEN)
       end
+    end
+
+    def self.max_response_bytes
+      return 1024 * 1024 if GRAAL_RUNTIME
+
+      MAX_RESPONSE_BYTES
     end
 
     if GRAAL_RUNTIME

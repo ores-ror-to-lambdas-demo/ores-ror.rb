@@ -139,3 +139,23 @@ Graal/Lambda do not boot `Rails.application`, the Rails router, initializers, Pu
 CI executes normal Rails and Rails-free Graal against all application routes in both JSON and HTML. It compares the exported contracts exactly, including controller-produced payloads, per-route middleware chains, middleware-derived response headers, and rendered representations. A product route intentionally contains custom controller logic and never calls `dispatch_ores_endpoint`; that route is part of the parity suite.
 
 The migration of runtime folders to `ores-ror.infra` is guarded by the same tests: app CI checks out the infra repo explicitly, asserts this app checkout contains neither `graal/` nor `aws-lambda/`, then reruns the complete matrix.
+
+
+## Rails adaptive concurrency
+
+Rails server mode runs directly under Puma 8. The default process-level request concurrency model is intentionally bounded:
+
+- 30 warm reusable request threads;
+- ordinary demand may grow the regular pool to 40;
+- Rails data-backed requests are classified as I/O-bound before controller execution;
+- Puma may create up to 10 additional I/O processor threads while those requests wait, for a hard default ceiling of 50 request-processing threads;
+- excess threads are reclaimed when demand falls;
+- `fiber_per_request` gives each request a clean Fiber so fiber-local state cannot leak when a worker thread is reused.
+
+This is a **reused thread pool**, not a newly spawned thread for every request. An in-flight synchronous Rack request still occupies one pooled Puma processor thread; the I/O classification makes Puma replace I/O-waiting capacity instead of allowing slow HTTP calls to consume all regular request capacity. The Data API connection pool defaults to the same 50-request ceiling and uses persistent keep-alive sessions with bounded connect/read/write timeouts and no hidden Net::HTTP retries.
+
+Run Puma directly so the Puma 8 concurrency contract is active:
+
+```sh
+ORES_BUILD_TARGET=rails bundle exec puma -C config/puma.rb config.ru
+```
