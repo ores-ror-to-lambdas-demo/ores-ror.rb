@@ -87,6 +87,7 @@ jobs:
           test -f generated/lambda/routes/orders/'[id]'/cancel/_post/handler.rb
           grep -Fq '"rails_application_initialized": false' generated/lambda/manifest.json
           grep -Fq '"route_source": "config/routes.rb:ripper-static"' generated/lambda/manifest.json
+          ruby -rjson -e 'm=JSON.parse(File.read("generated/lambda/manifest.json")); by=m.fetch("routes").to_h{|r|[r.fetch("name"),r.fetch("middleware")]}; raise unless by.fetch("user")==%w[request_id users_show_header]; raise unless by.fetch("cancel_order")==%w[request_id order_cancel_header]; raise unless by.fetch("search")==%w[request_id search_header]'
           grep -Fq '"model_file": "app/models/user.rb"' generated/lambda/manifest.json
           grep -Fq '"app/views/users/show/endpoint/show.json.erb"' generated/lambda/manifest.json
           grep -Fq '# --- APP MODEL app/models/user.rb ---' generated/lambda/routes/users/'[id]'/_get/handler.rb
@@ -120,6 +121,7 @@ jobs:
           grep -Fq '"language_context": "ruby"' generated/graal/manifest.json
           grep -Fq '"request_multiplexing": true' generated/graal/manifest.json
           grep -Fq '"route_handler_authority": "routes/**/handler.rb"' generated/graal/manifest.json
+          ruby -rjson -e 'm=JSON.parse(File.read("generated/graal/manifest.json")); by=m.fetch("routes").to_h{|r|[r.fetch("name"),r.fetch("middleware")]}; raise unless by.fetch("user")==%w[request_id users_show_header]; raise unless by.fetch("cancel_order")==%w[request_id order_cancel_header]; raise unless by.fetch("search")==%w[request_id search_header]'
           grep -Fq '"engine_scope": "process-shared"' generated/graal/manifest.json
           test -f 'routes/users/[id]/handler.rb'
           test -f 'routes/orders/[id]/cancel/handler.rb'
@@ -288,7 +290,7 @@ jobs:
         env:
           ORES_BUILD_TARGET: graal
         run: truffleruby script/graal-contract-export.rb /tmp/graal-contract.json
-      - name: Prove exact cross-runtime routing and representation parity
+      - name: Prove exact cross-runtime routing middleware and representation parity
         run: |
           diff -u /tmp/rails-contract.json /tmp/graal-contract.json
-          ruby -rjson -e 'rows=JSON.parse(File.read("/tmp/rails-contract.json")); routes=rows.map{|r|r.fetch("name")}.uniq; formats=rows.group_by{|r|r.fetch("name")}.transform_values{|v|v.map{|r|r.fetch("format")}.sort}; raise "expected >=15 routes, got #{routes.size}" unless routes.size >= 15; raise "missing html/json" unless formats.values.all?{|f|f==%w[html json]}; raise "expected two representations per route" unless rows.size == routes.size * 2'
+          ruby -rjson -e 'rows=JSON.parse(File.read("/tmp/rails-contract.json")); routes=rows.map{|r|r.fetch("name")}.uniq; formats=rows.group_by{|r|r.fetch("name")}.transform_values{|v|v.map{|r|r.fetch("format")}.sort}; raise "expected >=15 routes, got #{routes.size}" unless routes.size >= 15; raise "missing html/json" unless formats.values.all?{|f|f==%w[html json]}; raise "expected two representations per route" unless rows.size == routes.size * 2; by=rows.group_by{|r|r.fetch("name")}; {"user"=>"users-show","cancel_order"=>"order-cancel","search"=>"search"}.each{|name,policy| by.fetch(name).each{|row| raise "#{name} middleware chain" unless row.fetch("middleware").length==2; raise "#{name} route policy" unless row.fetch("middleware_headers").fetch("x-ores-route-policy")==policy }}'

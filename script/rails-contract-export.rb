@@ -46,6 +46,7 @@ routes.each do |route|
       format: format,
       status: session.response.status,
       content_type: session.response.media_type,
+      headers: session.response.headers.to_h,
       body: session.response.body
     )
   end

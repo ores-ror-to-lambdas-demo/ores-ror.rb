@@ -30,6 +30,31 @@ class RoutesTest < ActionDispatch::IntegrationTest
     assert_equal expected, actual
   end
 
+  test "Rails route middleware metadata is identical to the static Graal route contract" do
+    require Rails.root.join("lib/ores_build/static_routes")
+
+    static_routes = OresBuild::StaticRoutes.new(Rails.root).compile.index_by { |route| route.fetch(:name) }
+    rails_routes = Rails.application.routes.routes.each_with_object({}) do |route, out|
+      next unless route.name && static_routes.key?(route.name.to_s)
+      out[route.name.to_s] = route
+    end
+
+    expected = {
+      "user" => %w[request_id users_show_header],
+      "cancel_order" => %w[request_id order_cancel_header],
+      "search" => %w[request_id search_header]
+    }
+
+    static_routes.each do |name, route|
+      rails_route = rails_routes.fetch(name)
+      raw = rails_route.defaults[:ores_middleware] || rails_route.defaults["ores_middleware"]
+      assert raw, "#{name} must declare ores_middleware in config/routes.rb"
+      rails_chain = OresApp::Middleware.normalize_names(raw)
+      assert_equal route.fetch(:middleware), rails_chain, "#{name} middleware drift between Rails and Graal compiler"
+      assert_equal expected.fetch(name, %w[request_id]), rails_chain, "#{name} has unexpected middleware chain"
+    end
+  end
+
   test "every endpoint has a conventional app model and json plus html erb views" do
     require Rails.root.join("lib/ores_build/static_routes")
 

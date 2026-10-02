@@ -50,6 +50,7 @@ class AllRoutesContractTest < ActionDispatch::IntegrationTest
             format: format,
             status: response.status,
             content_type: response.media_type,
+            headers: response.headers.to_h,
             body: response.body
           )
           assert_equal 200, result.fetch("status")
