@@ -102,6 +102,11 @@ jobs:
           test ! -d routes
           grep -Fq 'CONTROLLER_PATH = "users/show/endpoint"' app/controllers/users/show/handler.rb
           grep -Fq 'ACTION = "show"' app/controllers/users/show/handler.rb
+          grep -Fq '"model_file": "app/models/user.rb"' generated/lambda/manifest.json
+          grep -Fq '"app/views/users/show/endpoint/show.json.erb"' generated/lambda/manifest.json
+          grep -Fq '# --- APP MODEL app/models/user.rb ---' generated/lambda/routes/users/'[id]'/_get/handler.rb
+          grep -Fq 'APP CONTROLLER app/controllers/users/show/endpoint_controller.rb' generated/lambda/routes/users/'[id]'/_get/handler.rb
+          grep -Fq 'VIEW_SOURCE' generated/lambda/routes/users/'[id]'/_get/handler.rb
           ! grep -R -E 'config/environment|Rails\.application' generated/lambda
 
       - name: Generate group-granularity Lambda artifacts without Rails
@@ -133,8 +138,14 @@ jobs:
           grep -Fq '"engine_scope": "process-shared"' generated/graal/manifest.json
           test -f app/controllers/users/show/handler.rb
           git check-ignore -q app/controllers/users/show/handler.rb
+          test -z "$(git ls-files ':(glob)app/controllers/**/handler.rb')"
           test ! -d routes
-          grep -Fq '# --- GENERATED SIDECAR app/controllers/users/show/handler.rb ---' 'generated/graal/routes/users/[id]/_get/handler.rb'
+                    grep -Fq '# --- GENERATED SIDECAR app/controllers/users/show/handler.rb ---' 'generated/graal/routes/users/[id]/_get/handler.rb'
+          grep -Fq '# --- APP MODEL app/models/user.rb ---' 'generated/graal/routes/users/[id]/_get/handler.rb'
+          grep -Fq 'APP CONTROLLER app/controllers/users/show/endpoint_controller.rb' 'generated/graal/routes/users/[id]/_get/handler.rb'
+          grep -Fq 'VIEW_SOURCE' 'generated/graal/routes/users/[id]/_get/handler.rb'
+          grep -Fq '"app/models/order.rb"' generated/graal/manifest.json
+          grep -Fq '"app/views/orders/show/endpoint/show.json.erb"' generated/graal/manifest.json
           grep -Fq '"source_memory": "host-read-only-shareable"' generated/graal/manifest.json
           grep -Fq '"supported_isolation_granularities"' generated/graal/manifest.json
           ! grep -R -E 'config/environment|Rails\.application' generated/graal
@@ -192,6 +203,8 @@ jobs:
                 )))
                 raise response.inspect unless response.fetch("status") == 200
                 raise "request id drift" unless response.dig("headers", "x-request-id") == request_id
+                rendered = JSON.parse(response.fetch("body"))
+                raise "compiled app view/model output missing" unless rendered["ok"] == true
                 raise "fiber-local leaked" unless Thread.current[:ores_ci_fiber_poison].nil?
                 raise "true thread-local leaked" unless Thread.current.thread_variable_get(:ores_ci_thread_poison).nil?
                 raise "preexisting fiber state destroyed" unless Thread.current[:ores_ci_preexisting] == "keep-fiber-#{thread_index}"
@@ -205,6 +218,44 @@ jobs:
           raise errors.pop unless errors.empty?
           RUBY
           truffleruby /tmp/graal-smoke.rb
+
+      - name: Execute a generated route-group context with embedded models and views
+        run: |
+          cat >/tmp/graal-group-smoke.rb <<'RUBY'
+          require "json"
+
+          host_http = lambda do |payload|
+            request = JSON.parse(payload.to_s)
+            JSON.generate("ok" => true, "status" => 200, "body" => JSON.generate(
+              "ok" => true,
+              "resource" => request.fetch("path")
+            ))
+          end
+
+          eval(File.read("generated/graal/common.rb"), TOPLEVEL_BINDING, "generated/graal/common.rb")
+          unit = "generated/graal/groups/orders/handler.rb"
+          factory = eval(File.read(unit), TOPLEVEL_BINDING, unit)
+          invoker = factory.call(host_http)
+          raise "Rails unexpectedly loaded" if defined?(Rails)
+          source_bundle = OresGenerated::AppSources.constants.map { |name| OresGenerated::AppSources.const_get(name) }
+          raise "controller source not packaged" unless source_bundle.any? { |bundle| bundle::CONTROLLER_FILE.include?("app/controllers/orders/") }
+          raise "model source not packaged" unless source_bundle.all? { |bundle| bundle::MODEL_FILE == "app/models/order.rb" }
+          raise "view source not packaged" unless source_bundle.all? { |bundle| bundle::VIEW_FILE.start_with?("app/views/orders/") }
+
+          %w[/orders/demo /orders/demo/cancel].each_with_index do |path, index|
+            method = path.end_with?("/cancel") ? "POST" : "GET"
+            response = JSON.parse(invoker.call(JSON.generate(
+              "request_id" => "graal-group-#{index}",
+              "method" => method,
+              "path" => path,
+              "headers" => {}
+            )))
+            raise response.inspect unless response.fetch("status") == 200
+            rendered = JSON.parse(response.fetch("body"))
+            raise rendered.inspect unless rendered["ok"] == true && rendered["resource"] == path
+          end
+          RUBY
+          truffleruby /tmp/graal-group-smoke.rb
 
   truffleruby-aws-lambda:
     runs-on: ubuntu-latest
