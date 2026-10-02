@@ -27,6 +27,17 @@ class RoutesTest < ActionDispatch::IntegrationTest
     assert_equal expected, actual
   end
 
+  test "every endpoint has a conventional app model and json erb view" do
+    require Rails.root.join("lib/ores_build/static_routes")
+
+    OresBuild::StaticRoutes.new(Rails.root).compile.each do |route|
+      assert route.fetch(:controller_file).start_with?("app/controllers/")
+      assert route.fetch(:model_file).start_with?("app/models/")
+      assert File.file?(Rails.root.join(route.fetch(:model_file))), route.inspect
+      assert route.fetch(:view_files).any? { |file| file.start_with?("app/views/") && file.end_with?(".json.erb") }, route.inspect
+    end
+  end
+
   test "each endpoint action is a normal Rails method under app/controllers" do
     Rails.application.eager_load!
 

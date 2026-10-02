@@ -12,6 +12,8 @@ class RuntimeContractTest < ActionDispatch::IntegrationTest
     assert_equal "rails", payload.fetch("execution_mode")
     assert payload.fetch("runtime").is_a?(String)
     assert_equal "contract-health", response.headers["x-request-id"]
+    assert_equal "application/json", response.media_type
+    assert Healthz < ApplicationModel
   end
 
   test "Rails router recognizes conventional controller and action names" do
