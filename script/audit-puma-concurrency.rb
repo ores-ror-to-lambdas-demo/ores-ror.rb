@@ -15,7 +15,8 @@ expected = {
   min_threads: Integer(ENV.fetch("RAILS_MIN_THREADS", "30")),
   max_threads: Integer(ENV.fetch("RAILS_REGULAR_MAX_THREADS", "40")),
   max_io_threads: Integer(ENV.fetch("RAILS_MAX_THREADS", "50")) - Integer(ENV.fetch("RAILS_REGULAR_MAX_THREADS", "40")),
-  fiber_per_request: true
+  fiber_per_request: true,
+  auto_trim_time: 30
 }
 
 actual = expected.keys.to_h { |key| [key, options[key]] }
@@ -32,5 +33,6 @@ puts JSON.pretty_generate({
   puma_version: Puma::Const::PUMA_VERSION,
   concurrency: actual,
   total_request_thread_ceiling: total_ceiling,
-  model: "30 warm -> 40 regular demand -> 50 with IO headroom"
+  model: "30 warm -> 40 regular demand -> 50 with IO headroom",
+  shrink: "idle threads above the 30-thread floor are auto-trimmed every #{actual.fetch(:auto_trim_time)}s"
 })
