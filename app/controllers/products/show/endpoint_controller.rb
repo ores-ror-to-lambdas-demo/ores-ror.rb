@@ -6,7 +6,7 @@ module Products
     class EndpointController < OresEndpointController
       def show
         product_id = params.fetch(:id).to_s
-        raise ActionController::BadRequest, "invalid product id" unless product_id.match?(/\A[A-Za-z0-9_-]{1,128}\z/)
+        raise OresApp::BadRequest, "invalid product id" unless product_id.match?(/\A[A-Za-z0-9_-]{1,128}\z/)
 
         result = OresApp::HttpDatabase.request(:get, "/products/#{product_id}", query: request.query_parameters)
         payload = result.fetch(:body).merge("controller_execution" => "products/show#show")
