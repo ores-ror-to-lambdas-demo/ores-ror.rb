@@ -157,6 +157,10 @@ end
 
 def clean_generated_endpoint_handlers!
   Dir.glob(File.join(ROOT, "app/controllers/**/handler.rb")).each do |path|
+    stat = File.lstat(path)
+    abort "refusing to follow symlinked generated handler sidecar: #{path}" if stat.symlink?
+    abort "refusing to replace non-regular handler sidecar: #{path}" unless stat.file?
+
     source = File.read(path)
     abort "refusing to overwrite non-generated handler sidecar: #{path}" unless source.include?(GENERATED_HANDLER_MARKER)
     FileUtils.rm_f(path)
