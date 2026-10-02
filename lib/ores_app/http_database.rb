@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "json"
+require_relative "json_codec"
 require "uri"
 
 module OresApp
@@ -17,19 +17,19 @@ module OresApp
       def self.request(method, path, body:, query:)
         raise Error, "Graal host HTTP bridge is unavailable" unless defined?(ORES_GS_HTTP)
 
-        raw = ORES_GS_HTTP.call(JSON.generate({
+        raw = ORES_GS_HTTP.call(JsonCodec.generate({
           method: method.to_s.upcase,
           path: path,
           query: query || {},
           body: body
         }))
-        response = JSON.parse(raw.to_s)
+        response = JsonCodec.parse(raw.to_s)
         raise Error, response.fetch("error", "host HTTP bridge failed") unless response["ok"]
 
         body_text = response.fetch("body", "")
-        parsed = body_text.empty? ? {} : JSON.parse(body_text)
+        parsed = body_text.empty? ? {} : JsonCodec.parse(body_text)
         { status: Integer(response.fetch("status")), body: parsed }
-      rescue JSON::ParserError => error
+      rescue JsonCodec::ParseError => error
         raise Error, "data API returned invalid JSON: #{error.message}"
       end
     end
@@ -63,15 +63,15 @@ module OresApp
           req["accept"] = "application/json"
           req["content-type"] = "application/json"
           req["authorization"] = "Bearer #{@token}" unless @token.empty?
-          req.body = JSON.generate(body) if body
+          req.body = JsonCodec.generate(body) if body
 
           response = @http.request(req)
-          parsed = response.body.to_s.empty? ? {} : JSON.parse(response.body)
+          parsed = response.body.to_s.empty? ? {} : JsonCodec.parse(response.body)
           { status: response.code.to_i, body: parsed }
         rescue IOError, EOFError, SystemCallError
           reconnect!
           raise Error, "HTTP data connection reset; retry request through caller policy"
-        rescue JSON::ParserError => error
+        rescue JsonCodec::ParseError => error
           raise Error, "data API returned invalid JSON: #{error.message}"
         end
 
