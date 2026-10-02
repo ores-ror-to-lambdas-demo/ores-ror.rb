@@ -10,7 +10,7 @@ module OresApp
     GRAAL_RUNTIME = defined?(ORES_GRAAL_RUNTIME) && ORES_GRAAL_RUNTIME
 
     def self.runtime_name
-      GRAAL_RUNTIME ? "truffleruby-graal-lambda" : RUBY_ENGINE
+      GRAAL_RUNTIME ? "truffleruby-graal" : RUBY_ENGINE
     end
 
     class GraalTransport
@@ -106,12 +106,16 @@ module OresApp
       end
     end
 
-    def self.request(method, path, body: nil, query: {})
-      return GraalTransport.request(method, path, body: body, query: query) if GRAAL_RUNTIME
-
-      POOL.with { |session| session.request(method, path, body: body, query: query) }
-    rescue ConnectionPool::TimeoutError
-      raise Error, "HTTP data connection pool exhausted"
+    if GRAAL_RUNTIME
+      def self.request(method, path, body: nil, query: {})
+        GraalTransport.request(method, path, body: body, query: query)
+      end
+    else
+      def self.request(method, path, body: nil, query: {})
+        POOL.with { |session| session.request(method, path, body: body, query: query) }
+      rescue ConnectionPool::TimeoutError
+        raise Error, "HTTP data connection pool exhausted"
+      end
     end
   end
 end

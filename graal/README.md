@@ -1,17 +1,21 @@
 # Graal runtime profile
 
-This directory is runtime glue for the Rails-free lambda build. It is **not** a Rails application and it never boots Rails.
+This is the Rails-free Graal/TruffleRuby deployment profile. It does not initialize `Rails.application`.
 
-Build first:
+- one host OS process may own one shared Graal engine;
+- every concrete route gets exactly one long-lived Ruby context/isolate;
+- every route group gets exactly one long-lived Ruby context/isolate;
+- each context multiplexes requests over at most 5 host threads;
+- a worker is a host execution thread entering a context, not another OS process or another context;
+- mutable Ruby state is context-local while compiled/source material may be shared read-only by the engine;
+- guest-created threads, filesystem access, child processes, raw sockets, and native FFI remain disabled;
+- data access uses the host HTTP capability.
+
+`config/routes.rb` is the Rails routing authority. Committed `routes/**/handler.rb` files are the execution-adapter authority. Lambda/Graal builds validate a one-to-one mapping before generation.
 
 ```sh
-BUNDLE_WITHOUT=rails ORES_BUILD_TARGET=lambda ruby bin/build-runtime
+ORES_BUILD_TARGET=lambda ruby bin/build-runtime
+ORES_BUILD_TARGET=graal ruby bin/build-runtime
 ```
 
-`graal/bootstrap.rb` loads only `generated/lambda/entrypoint.rb`. Each generated route handler calls the matching `OresApp::Controllers::*` plain-Ruby controller and renders the matching Rails view source that was embedded during code generation.
-
-The controller/action/view mapping comes from the same route contract used by ordinary Rails, but Lambda/Graal never requires `config/environment`, `Rails.application`, ActionController, ActionView, or the Rails router.
-
-Every route has `generated/lambda/routes/.../handler.rb`. Grouped handlers are also generated so a supervisor may load a family such as `orders`, `users`, or `carts` into one isolate and switch between member routes. `ORES_LAMBDA_HANDLER_GRANULARITY=route|group` chooses the active generated dispatch strategy.
-
-Generated files are ignored build artifacts under `generated/`.
+Normal Rails mode boots Rails conventionally. Lambda/Graal mode uses the generated Rails route contract plus shared middleware without booting the Rails application.

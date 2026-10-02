@@ -1,7 +1,5 @@
 # frozen_string_literal: true
 
-require "securerandom"
-
 module OresApp
   module Middleware
     module_function
@@ -30,7 +28,7 @@ module OresApp
       candidate = value.to_s
       return candidate if candidate.match?(/\A[A-Za-z0-9._:-]{1,128}\z/)
 
-      "ores-req-#{SecureRandom.hex(12)}"
+      raise ArgumentError, "valid request_id is required at the ingress boundary"
     end
     private_class_method :invoke, :normalized_request_id
   end

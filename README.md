@@ -1,119 +1,139 @@
 # ores-ror.rb
 
-One repository, two build modes, one routing/controller/view contract.
+One repository, two build modes, one route/middleware/business-logic source of truth.
 
-## Hard invariant
+## Invariant
 
-Rails boots **only** in ordinary Rails server mode. Lambda/Graal never boots Rails.
+The checkout is not edited to switch runtimes. Environment variables select the build:
 
 ```sh
-# normal Rails/Puma application
+# ordinary Rails application
 ORES_BUILD_TARGET=rails bundle exec rails server
 
-# generate Rails-free Lambda/Graal artifacts
-BUNDLE_WITHOUT=rails ORES_BUILD_TARGET=lambda ruby bin/build-runtime
+# lambda artifact generation; no Rails boot
+ORES_BUILD_TARGET=lambda ruby bin/build-runtime
 ```
 
-The checkout is unchanged between modes. `generated/` is build output and is ignored by Git.
+Generated lambda artifacts live under `generated/` and are intentionally ignored by Git.
 
-## Shared source contract
+## Shared application contract
 
-`lib/ores_app/routes.rb` records each route's HTTP method/path, middleware, isolate pool, Rails controller/action, and Rails view. Normal Rails installs that contract into `Rails.application.routes`. Lambda codegen reads the same metadata at build time.
+`lib/ores_app/routes.rb` is Rails-independent and owns the route table, middleware list, handler ID, handler group, and isolate-pool key. Every declared URL also owns a committed filesystem handler under `routes/`. `config/routes.rb` installs the same route table into Rails, while both Rails and generated lambda/Graal dispatch execute the committed route handler before entering shared business code.
 
-Rails controllers under `app/controllers/` are thin framework adapters. Actual controller behavior lives in the Rails-independent `OresApp::Controllers::*` classes. Both Rails and Lambda/Graal call those same plain-Ruby controller classes.
+Rails mode boots Rails normally. Lambda mode must never require `config/environment`, `Rails.application`, Rack dispatch, Rails initializers, or Puma.
 
-Rails views remain under normal `app/views/...json.erb` paths. During the lambda build, the matching view source is embedded into that route's generated `handler.rb`, so an isolate does not need ActionView or a Rails boot to render it.
+## Source route filesystem
 
-## Generated Lambda filesystem
-
-There is intentionally no authored top-level `routes/` handler tree. Codegen creates:
+Routes are real source directories, not only rows in `lib/ores_app/routes.rb`. Dynamic URL parameters use `[name]` in the filesystem so the repository remains portable across operating systems; for example `:id` maps to `[id]`.
 
 ```text
-generated/lambda/routes/
-├── users/[id]/handler.rb
-├── carts/[id]/handler.rb
-├── checkout-sessions/[id]/handler.rb
-├── products/[id]/handler.rb
-├── orders/[id]/handler.rb
-├── orders/[id]/cancel/handler.rb
-├── accounts/[id]/handler.rb
-├── inventory/[id]/handler.rb
-├── recommendations/[id]/handler.rb
+routes/
+├── users/
+│   └── [id]/
+│       └── handler.rb
+├── carts/
+│   └── [id]/
+│       └── handler.rb
+├── checkout-sessions/
+│   └── [id]/
+│       └── handler.rb
+├── products/
+│   └── [id]/
+│       └── handler.rb
+├── orders/
+│   └── [id]/
+│       ├── handler.rb
+│       └── cancel/
+│           └── handler.rb
+├── accounts/
+│   └── [id]/handler.rb
+├── inventory/
+│   └── [id]/handler.rb
+├── recommendations/
+│   └── [id]/handler.rb
 ├── search/handler.rb
 ├── sessions/handler.rb
-├── profiles/[id]/preferences/handler.rb
+├── profiles/
+│   └── [id]/preferences/handler.rb
 └── healthz/handler.rb
 ```
 
-A generated file contains the exact source mapping and calls the corresponding plain-Ruby controller plus the build-embedded view:
+`OresApp::Routes.handler_relative_path` deterministically maps each route-table entry to its source handler. Rails tests assert the complete mapping, and lambda codegen aborts if any declared route lacks its committed `handler.rb`.
 
-```ruby
-RAILS_CONTROLLER = "OrdersController"
-CONTROLLER_PATH = "orders"
-CONTROLLER = OresApp::Controllers::Orders
-ACTION = :cancel
-VIEW = "orders/cancel"
-TEMPLATE = "...contents of app/views/orders/cancel.json.erb..."
+## Lambda handler topology
 
-def call(request)
-  result = CONTROLLER.call(ACTION, request)
-  OresApp::LambdaView.render(VIEW, TEMPLATE, result)
-end
-```
-
-`RAILS_CONTROLLER` is provenance/build metadata. The lambda runtime does **not** load that Rails class. It calls `OresApp::Controllers::Orders`, which contains no Rails dependency.
-
-## Execution paths
-
-Normal Rails:
+Every source route gets its own URL-shaped generated handler wrapper:
 
 ```text
-HTTP
- -> Rails router
- -> OrdersController#cancel
- -> OresApp::Controllers::Orders.call(:cancel, request)
- -> app/views/orders/cancel.json.erb
- -> response
+generated/lambda/routes/users/[id]/handler.rb
+generated/lambda/routes/carts/[id]/handler.rb
+generated/lambda/routes/orders/[id]/handler.rb
+generated/lambda/routes/orders/[id]/cancel/handler.rb
+...
 ```
 
-Lambda/Graal:
+The generated wrapper calls the corresponding committed source handler. Codegen also emits higher-level grouped handlers with a switch over the member routes:
 
 ```text
-HTTP/event
- -> generated route matcher
- -> generated/lambda/routes/orders/[id]/cancel/handler.rb
- -> OresApp::Controllers::Orders.call(:cancel, request)
- -> embedded app/views/orders/cancel.json.erb source
- -> response
+generated/lambda/groups/users/handler.rb
+generated/lambda/groups/carts/handler.rb
+generated/lambda/groups/orders/handler.rb
+generated/lambda/groups/system/handler.rb
+...
 ```
 
-The Lambda/Graal path has **no** `config/environment`, `Rails.application`, Rails router, ActionController, ActionView, initializer, Puma, or Rails boot.
-
-## Route vs grouped handlers
-
-Codegen always creates per-route handlers and also grouped handlers such as `generated/lambda/groups/orders/handler.rb`. Select the active dispatch topology with:
+Choose the active dispatch layer at build time:
 
 ```sh
 ORES_BUILD_TARGET=lambda ORES_LAMBDA_HANDLER_GRANULARITY=route ruby bin/build-runtime
 ORES_BUILD_TARGET=lambda ORES_LAMBDA_HANDLER_GRANULARITY=group ruby bin/build-runtime
 ```
 
-The group handler only switches among its generated route handlers; it does not introduce Rails.
+`route` is the default because one generated `handler.rb` per route is the smallest known-good lambda unit. `group` lets an isolate load a larger route family (for example all order routes) and switch on the matched route without changing source code.
+
+The generated `manifest.json` records the committed source handler, generated route handler, grouped handler, middleware, group, and isolate pool for every route. A supervisor can therefore pool isolates by route, group, privilege class, deployment generation, or another policy without asking Rails to route the request.
+
+## Request flow
+
+```text
+HTTP -> shared route match -> shared middleware -> isolate-pool selection -> committed route handler -> shared business code
+```
+
+The Rails path is:
+
+```text
+HTTP -> Rails router generated from shared route table -> thin controller adapter -> shared dispatcher/middleware -> committed route handler -> shared business code
+```
+
+The lambda/Graal path is:
+
+```text
+HTTP/event -> shared route match -> shared middleware -> generated route/group wrapper -> committed route handler -> shared business code
+```
+
+The two modes share application semantics and source handlers, not Rails runtime state.
+
+## Rails concurrency contract
+
+Rails remains one ordinary Rails application. It is not copied into each Lambda or Graal context.
+
+Puma owns a bounded reusable request-thread pool. Production defaults are 50 minimum and 300 maximum threads, configurable with `RAILS_MIN_THREADS` and `RAILS_MAX_THREADS`; development and test keep smaller defaults. A physical thread may serve many requests over its lifetime.
+
+The runtime contract is therefore:
+
+```text
+request identity != Thread.current identity
+request lifetime  != worker-thread lifetime
+```
+
+Rails and third-party gems may continue to use `Thread.current` in the normal Ruby/Rails way, but request-specific thread-local state must obey the normal request cleanup lifecycle before that worker serves another request.
+
+The Graal path uses the same rule at a smaller scale: one long-lived Ruby Context per isolate, with a bounded host-owned pool of up to five reusable threads. Request identity is carried explicitly in the invocation envelope.
 
 ## Graal/TruffleRuby
 
-`graal/bootstrap.rb` loads `generated/lambda/entrypoint.rb` only. A warm TruffleRuby context loads the generated plain-Ruby runtime and can serve many requests. Rails is not installed in the custom Lambda image and is not booted in Graal contexts.
+`graal/bootstrap.rb` loads only `generated/lambda/entrypoint.rb`. It does not boot Rails. The Graal supervisor can keep pools of long-lived TruffleRuby contexts and multiplex many requests through the generated route/group handlers, subject to the supervisor's concurrency/lifetime policy.
 
-The Graal host continues to own privileged capabilities such as outbound data-API HTTP. Guest code receives the existing explicit host bridge rather than raw sockets/database access.
+## Tests
 
-## CI proof
-
-GitHub Actions proves all of these separately:
-
-- MRI boots and serves the ordinary Rails app.
-- TruffleRuby boots and serves the ordinary Rails app when `ORES_BUILD_TARGET=rails`.
-- Route and grouped lambda codegen run with `BUNDLE_WITHOUT=rails`.
-- Generated `handler.rb` files contain the expected controller/action/view mapping.
-- Generated code contains no Rails runtime references.
-- The TruffleRuby Lambda image explicitly fails if the Rails gem is installed.
-- The Lambda runtime executes `/healthz` through the generated handler and returns `execution_mode=lambda`.
+Rails tests remain under `test/`. No-Rails lambda tests live under `lambda-test/` so the lambda contract can explicitly assert that the `Rails` constant was never loaded. CI additionally verifies the committed route tree and the URL-shaped generated route tree.

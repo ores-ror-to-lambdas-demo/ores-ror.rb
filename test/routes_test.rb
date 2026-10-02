@@ -1,37 +1,45 @@
 require "test_helper"
 
 class RoutesTest < ActionDispatch::IntegrationTest
-  test "demo route surface is present" do
-    expected = %w[user cart checkout_session product order cancel_order account inventory recommendations search sessions preferences health]
-    names = Rails.application.routes.routes.filter_map { |route| route.name&.to_s }
-    assert_empty(expected - names)
-  end
-
-  test "lambda filesystem is generated only under generated lambda routes" do
-    refute Dir.exist?(Rails.root.join("routes")), "authored routes/ handler tree must not exist"
-
+  test "Rails routes are the only endpoint routing source of truth" do
     expected = {
-      "/users/:id" => "users/[id]/handler.rb",
-      "/carts/:id" => "carts/[id]/handler.rb",
-      "/checkout-sessions/:id" => "checkout-sessions/[id]/handler.rb",
-      "/products/:id" => "products/[id]/handler.rb",
-      "/orders/:id" => "orders/[id]/handler.rb",
-      "/orders/:id/cancel" => "orders/[id]/cancel/handler.rb",
-      "/accounts/:id" => "accounts/[id]/handler.rb",
-      "/inventory/:id" => "inventory/[id]/handler.rb",
-      "/recommendations/:id" => "recommendations/[id]/handler.rb",
-      "/search" => "search/handler.rb",
-      "/sessions" => "sessions/handler.rb",
-      "/profiles/:id/preferences" => "profiles/[id]/preferences/handler.rb",
-      "/healthz" => "healthz/handler.rb"
+      "user" => ["users/show/endpoint", "show"],
+      "cart" => ["carts/show/endpoint", "show"],
+      "checkout_session" => ["checkout_sessions/create/endpoint", "create"],
+      "product" => ["products/show/endpoint", "show"],
+      "order" => ["orders/show/endpoint", "show"],
+      "cancel_order" => ["orders/cancel/endpoint", "cancel"],
+      "account" => ["accounts/show/endpoint", "show"],
+      "inventory" => ["inventory/show/endpoint", "show"],
+      "recommendations" => ["recommendations/show/endpoint", "show"],
+      "search" => ["search/index/endpoint", "index"],
+      "create_session" => ["sessions/create/endpoint", "create"],
+      "preferences" => ["profiles/preferences/show/endpoint", "show"],
+      "health" => ["healthz/show/endpoint", "show"]
     }
 
-    actual = OresApp::Routes::TABLE.to_h { |route| [route.path, OresApp::Routes.lambda_route_relative_path(route)] }
-    assert_equal expected, actual
+    actual = Rails.application.routes.routes.each_with_object({}) do |route, out|
+      next unless route.name && expected.key?(route.name.to_s)
 
-    OresApp::Routes::TABLE.each do |route|
-      assert File.file?(OresApp::Routes.controller_source_path(route)), "missing controller for #{route.path}"
-      assert File.file?(OresApp::Routes.view_source_path(route)), "missing view for #{route.path}"
+      out[route.name.to_s] = [route.defaults[:controller], route.defaults[:action]]
+    end
+
+    assert_equal expected, actual
+  end
+
+  test "each endpoint action is a normal Rails method under app/controllers" do
+    Rails.application.eager_load!
+
+    Rails.application.routes.routes.each do |route|
+      next unless route.name
+
+      controller = route.defaults[:controller].to_s
+      action = route.defaults[:action].to_s
+      next if controller.empty? || action.empty?
+
+      klass = "#{controller.camelize}Controller".constantize
+      source = klass.instance_method(action).source_location&.first
+      assert source&.include?("/app/controllers/"), "#{controller}##{action} is not backed by app/controllers"
     end
   end
 end
