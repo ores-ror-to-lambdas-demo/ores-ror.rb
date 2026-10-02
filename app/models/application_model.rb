@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require_relative "../../lib/ores_app/json_codec"
+
 class ApplicationModel
   attr_reader :attributes
 
@@ -16,11 +18,11 @@ class ApplicationModel
   end
 
   def json_view
-    mark_html_safe(JSON.generate(to_h))
+    mark_html_safe(OresApp::JsonCodec.generate(to_h))
   end
 
   def html_json_view
-    escaped = JSON.generate(to_h)
+    escaped = OresApp::JsonCodec.generate(to_h)
       .gsub("&", "&amp;")
       .gsub("<", "&lt;")
       .gsub(">", "&gt;")
