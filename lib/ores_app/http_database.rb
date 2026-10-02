@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require_relative "json_codec"
-require "uri"
 
 module OresApp
   class HttpDatabase
@@ -35,6 +34,7 @@ module OresApp
     end
 
     unless GRAAL_RUNTIME
+      require "uri"
       require "connection_pool"
       require "net/http"
 
