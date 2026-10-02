@@ -1,112 +1,101 @@
 # ores-ror.rb
 
-One application repository, two execution modes, one route/middleware/controller source of truth.
+One Rails application source tree, with normal Rails execution plus generated Rails-free Lambda/Graal execution.
 
-## Repository boundary
+## Non-negotiable runtime boundary
 
-This repository owns application semantics:
+**Rails only boots in Rails mode.**
 
-- `config/routes.rb` — Rails routing and per-route middleware authority;
-- `routes/**/handler.rb` — physical route execution adapters;
-- `app/controllers/**`, `app/models/**`, `app/views/**` — conventional Rails MVC source;
-- `lib/ores_app/**` — shared Rails-free dispatcher, middleware, handlers, and HTTP data boundary;
-- `lib/ores_build/**` + `bin/build-runtime` — static compiler;
-- `generated/**` — ephemeral Lambda/Graal artifacts.
-
-Runtime/deployment adapters are intentionally **not** stored here. They live in the companion repository:
-
-`ores-ror-to-lambdas-demo/ores-ror.infra`
-
-That repo owns `graal/**`, `aws-lambda/**`, hosting profiles, Docker/runtime adapters, and deployment tooling.
-
-## Build modes
-
-Normal Rails needs only this checkout:
+Normal Rails mode is a normal Rails application:
 
 ```sh
 ORES_BUILD_TARGET=rails bundle exec rails server
 ```
 
-Lambda application artifacts are generated here without Rails:
+It uses the Rails router, controllers, callbacks, models, Action View, initializers, and Puma normally. Production Puma defaults to a bounded 50–300 thread pool and can be tuned with `RAILS_MIN_THREADS` / `RAILS_MAX_THREADS`.
+
+Lambda and Graal are compilation/runtime targets derived from the Rails source tree. They do **not** boot `Rails.application`, Action Controller, Action View, Puma, or Rails initializers.
+
+## Rails remains the source of truth
+
+Application semantics live in ordinary Rails locations:
+
+- `config/routes.rb` — sole route and per-route middleware authority;
+- `app/controllers/**` — controller/action source;
+- `app/models/**` — model source;
+- `app/views/**` — shared Rails views;
+- co-located endpoint views under the controller hierarchy when useful;
+- `lib/ores_app/**` — portable application/runtime helpers;
+- `lib/ores_build/**` + `bin/build-runtime` — static Rails-to-runtime compiler.
+
+There is **no** committed parallel `routes/**/handler.rb` tree and no `# ores-route` annotation layer.
+
+The compiler statically reads `config/routes.rb` without booting Rails, resolves the corresponding controller/action/model/views by Rails filesystem convention, and fails closed on unsupported or ambiguous input.
+
+## Controller-adjacent generated handler.rb
+
+Each portable endpoint uses a dedicated controller directory. During Lambda/Graal generation the compiler creates an ignored `handler.rb` beside that controller.
+
+Example:
+
+```text
+app/controllers/
+└── users/
+    └── show/
+        ├── endpoint_controller.rb   # tracked Rails source
+        └── handler.rb              # GENERATED, gitignored
+```
+
+The generated sidecar is deliberately small. It records the resolved controller/action/view contract and calls the co-located controller through `call_ores_action`. It is not an independent source of routing truth.
+
+Generated sidecars:
+
+- are recreated from Rails source;
+- are ignored by Git;
+- reject replacement through symlinks;
+- may not silently overwrite a non-generated file.
+
+## Views
+
+Normal Rails mode renders through Action View exactly as a Rails application normally would.
+
+For Lambda/Graal, ERB templates are compiled **at build time** into plain-Ruby renderer lambdas and embedded into the generated artifact. Guest execution does not load Action View or an ERB compiler and does not read application view files at request time.
+
+Shared views can stay in `app/views/**`. Endpoint-specific views can follow the endpoint/controller hierarchy used by this demo.
+
+## Build targets
+
+Lambda:
 
 ```sh
 ORES_BUILD_TARGET=lambda ORES_LAMBDA_HANDLER_GRANULARITY=route ruby bin/build-runtime
+```
+
+or:
+
+```sh
 ORES_BUILD_TARGET=lambda ORES_LAMBDA_HANDLER_GRANULARITY=group ruby bin/build-runtime
 ```
 
-Graal generation additionally consumes the infra-owned bootstrap:
+Graal:
 
 ```sh
-ORES_INFRA_ROOT=../ores-ror.infra \
-  ORES_BUILD_TARGET=graal \
-  truffleruby bin/build-runtime
+ORES_INFRA_ROOT=../ores-ror.infra ORES_BUILD_TARGET=graal truffleruby bin/build-runtime
 ```
 
-The compiler fails closed if that bootstrap is unavailable.
+The Graal bootstrap and hosting implementation belong to the companion repository:
 
-## Authority invariant
+`ores-ror-to-lambdas-demo/ores-ror.infra`
 
-Infra consumes the application contract; infra does not redefine it.
-
-```text
-config/routes.rb
-      │
-      ├── route + middleware metadata
-      ├── controller/action mapping
-      └── route/group mapping
-      │
-      ▼
-lib/ores_build/static_routes.rb
-      │
-      ▼
-generated/lambda + generated/graal
-      │
-      ├──────────────┐
-      ▼              ▼
-AWS Lambda infra   Graal infra
-```
-
-Both Rails and generated Graal/Lambda paths execute the same real controller action, controller callbacks, per-route middleware chain, models, and Action View templates. A committed `routes/**/handler.rb` adapter is an explicit/manual route-to-controller mapping and must import and invoke its mapped controller directly.
-
-For autogenerated mappings, a controller declares one or more static route contracts near the top of the file:
-
-```ruby
-# ores-route: GET /products/:id action=show
-```
-
-The compiler validates these declarations against `config/routes.rb` and fails on disagreement. `ORES_ROUTE_HANDLER_MODE=hybrid` (default) prefers committed handlers and falls back to matching annotations; `manual` requires committed handlers; `annotation` ignores the manual adapter and generates the direct controller adapter from the annotation. The compiler also rejects manual adapters that bypass the controller through `OresApp::Handlers.call`.
-
-## Source route filesystem
-
-Dynamic URL parameters use `[name]` in the filesystem. The current committed surface contains at least 15 routes, including:
-
-```text
-routes/
-├── users/[id]/handler.rb
-├── users/[id]/activity/handler.rb
-├── carts/[id]/handler.rb
-├── checkout-sessions/[id]/handler.rb
-├── products/[id]/handler.rb
-├── orders/[id]/handler.rb
-├── orders/[id]/receipt/handler.rb
-├── orders/[id]/cancel/handler.rb
-├── accounts/[id]/handler.rb
-├── inventory/[id]/handler.rb
-├── recommendations/[id]/handler.rb
-├── search/handler.rb
-├── sessions/handler.rb
-├── profiles/[id]/preferences/handler.rb
-└── healthz/handler.rb
-```
+This repository intentionally contains neither `graal/` nor `aws-lambda/` deployment/runtime folders.
 
 ## Generated topology
-
-Route-level and group-level build artifacts remain in this app checkout:
 
 ```text
 generated/
 ├── lambda/
 │   ├── manifest.json
+│   ├── common.rb
 │   ├── routes/...
 │   └── groups/...
 └── graal/
@@ -116,26 +105,87 @@ generated/
     └── groups/...
 ```
 
-They are generated and ignored by Git. Generated route units embed executable controller/model source and route ERB templates. Graal/Lambda render those templates through a small in-memory plain-Ruby ERB runtime; they do not load Action View or read application view files at request time.
+Generated artifacts are ephemeral and ignored by Git.
 
-## Direct controller execution
+They embed only the portable Ruby needed for the selected route/group: controller/model source, compiled view renderers, portable routing/middleware/runtime code, and the generated controller-adjacent sidecar contract.
 
-The Rails path is:
+## Request flow
 
-```text
-HTTP -> Rails router -> real controller action -> controller callbacks/middleware -> model -> Action View
-```
-
-The Graal/Lambda path is:
+Rails mode:
 
 ```text
-event -> generated route match -> routes/**/handler.rb -> same real controller action -> same controller callbacks/middleware -> same model -> Action View -> captured Rack response
+HTTP
+  -> Rails router
+  -> Rails controller/action
+  -> Rails callbacks + portable route middleware
+  -> model/business logic
+  -> Action View
+  -> Rails response
 ```
 
-Graal/Lambda do not boot `Rails.application`, the Rails router, initializers, Puma, Action Controller, or Action View. The committed/generated handler invokes the same endpoint controller class directly. In Rails mode, `OresEndpointController` inherits `ApplicationController` and uses Rails callbacks/rendering; in Graal/Lambda mode the same endpoint controller source inherits a plain-Ruby compatibility base that supplies request/response/params plus in-memory ERB rendering. The same `OresApp::Middleware` chain wraps the action in both modes, so a custom action does not need to call `dispatch_ores_endpoint`.
+Graal/Lambda mode:
+
+```text
+request/event
+  -> generated route table
+  -> generated controller-adjacent handler
+  -> same controller action source
+  -> portable middleware
+  -> model/business logic
+  -> build-time-compiled view renderer
+  -> runtime response
+```
+
+The generated runtime uses a small plain-Ruby request/response/controller compatibility layer; it is not Rails.
+
+## Threading and request state
+
+The two execution modes intentionally have different hosting models:
+
+- **Rails/Puma:** normal Rails server execution with a bounded worker-thread pool; production defaults are 50 minimum / 300 maximum threads.
+- **Graal:** one long-lived TruffleRuby `Context` per route or route-group isolate, entered by a bounded host thread pool of 5.
+- **Lambda:** normal Lambda execution-environment concurrency around generated Rails-free Ruby.
+
+Request identity must never equal physical thread identity.
+
+Portable Graal request execution is wrapped by `OresApp::ThreadStateBoundary`, which snapshots and restores both Ruby `Thread#[]`/fiber-local state and true thread variables before a host worker is reused. Guest-created threads remain disallowed by the Graal host.
+
+Rails and third-party Rails gems remain entirely in Rails mode; their thread-local/execution-local behavior is therefore a Rails/Puma compatibility concern, not something imported into the Graal guest.
+
+## Graal contract
+
+The generated Graal manifest declares:
+
+- one process-shared Graal `Engine`;
+- one long-lived Ruby `Context` per route/group isolate;
+- `host_thread_pool_size_per_context: 5`;
+- execution/admission bounded to 5;
+- explicit per-invocation request state;
+- thread identity is not request identity;
+- Rails boot disabled;
+- guest filesystem, raw sockets, native FFI, child processes, and guest-created threads disabled;
+- database/network access through the narrow host HTTP capability.
+
+The infra supervisor additionally starts embedded TruffleRuby with multithreaded Context access explicitly enabled while keeping guest thread creation disabled.
+
+## Lambda packaging boundary
+
+The final Lambda runtime image contains generated Lambda artifacts plus infra-owned runtime adapters and a minimal Rails-free Gemfile.
+
+It does **not** contain the Rails application source tree and does not install the Rails, Action Pack, or Action View gems.
 
 ## Cross-runtime proof
 
-CI executes normal Rails and Rails-free Graal against all application routes in both JSON and HTML. It compares the exported contracts exactly, including controller-produced payloads, per-route middleware chains, middleware-derived response headers, and rendered representations. A product route intentionally contains custom controller logic and never calls `dispatch_ores_endpoint`; that route is part of the parity suite.
+CI verifies:
 
-The migration of runtime folders to `ores-ror.infra` is guarded by the same tests: app CI checks out the infra repo explicitly, asserts this app checkout contains neither `graal/` nor `aws-lambda/`, then reruns the complete matrix.
+- normal Rails on MRI;
+- normal Rails on TruffleRuby;
+- Rails-free static code generation;
+- generated sidecars are ignored and convention-derived;
+- Rails-free Lambda image construction and invocation;
+- five-thread warm-Context request-state cleanup;
+- route/group Graal generation;
+- exact Rails-vs-Graal behavior across every demo route in JSON and HTML;
+- symlink/path/output trust-boundary failures are rejected.
+
+The purpose of the demo is not to replace Rails semantics in Rails mode. It is to preserve normal Rails as the authoring/runtime baseline while producing explicit, testable Rails-free execution artifacts for Lambda and Graal.
