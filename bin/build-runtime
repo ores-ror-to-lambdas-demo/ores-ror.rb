@@ -75,16 +75,16 @@ FORBIDDEN_HANDLER_SOURCE = {
   /\bThread\s*\.\s*(?:new|start|fork)\b/ => "guest-created thread"
 }.freeze
 
-def preferred_view_file(route)
-  route.fetch(:view_files).find { |file| file.end_with?(".json.erb") } ||
-    abort("route #{route.fetch(:name)} has no .json.erb view")
+def view_file_for(route, format)
+  route.fetch(:view_files).find { |file| file.end_with?(".#{format}.erb") } ||
+    abort("route #{route.fetch(:name)} has no .#{format}.erb view")
 end
 
 def validate_app_dependencies!(routes)
   abort "missing #{APPLICATION_MODEL_FILE}" unless File.file?(File.join(ROOT, APPLICATION_MODEL_FILE))
 
   executable_sources = [APPLICATION_MODEL_FILE] + routes.map { |route| route.fetch(:model_file) } +
-    routes.map { |route| preferred_view_file(route) }
+    routes.flat_map { |route| %w[json html].map { |format| view_file_for(route, format) } }
   executable_sources.uniq.each do |relative|
     source = File.read(File.join(ROOT, relative))
     FORBIDDEN_HANDLER_SOURCE.each do |pattern, label|
@@ -110,10 +110,13 @@ end
 def presentation_source(route)
   controller_file = route.fetch(:controller_file)
   model_file = route.fetch(:model_file)
-  view_file = preferred_view_file(route)
+  json_view_file = view_file_for(route, "json")
+  html_view_file = view_file_for(route, "html")
   controller_source = File.read(File.join(ROOT, controller_file))
-  view_source = File.read(File.join(ROOT, view_file))
-  compiled_view = compiled_erb_body(view_source)
+  json_view_source = File.read(File.join(ROOT, json_view_file))
+  html_view_source = File.read(File.join(ROOT, html_view_file))
+  compiled_json_view = compiled_erb_body(json_view_source)
+  compiled_html_view = compiled_erb_body(html_view_source)
   const = route_const(route)
 
   <<~RUBY
@@ -124,8 +127,12 @@ def presentation_source(route)
           CONTROLLER_FILE = #{controller_file.inspect}.freeze
           CONTROLLER_SOURCE = #{controller_source.dump}.freeze
           MODEL_FILE = #{model_file.inspect}.freeze
-          VIEW_FILE = #{view_file.inspect}.freeze
-          VIEW_SOURCE = #{view_source.dump}.freeze
+          JSON_VIEW_FILE = #{json_view_file.inspect}.freeze
+          JSON_VIEW_SOURCE = #{json_view_source.dump}.freeze
+          HTML_VIEW_FILE = #{html_view_file.inspect}.freeze
+          HTML_VIEW_SOURCE = #{html_view_source.dump}.freeze
+          VIEW_FILE = JSON_VIEW_FILE
+          VIEW_SOURCE = JSON_VIEW_SOURCE
         end
       end
 
@@ -133,13 +140,29 @@ def presentation_source(route)
         module #{const}
           module_function
 
-          def call(response)
+          def call(response, request)
             model = #{route.fetch(:model_class)}.new(response.fetch(:body))
-            response.merge(body: render_view(model))
+            format = requested_format(request)
+            headers = response.fetch(:headers, {}).merge(
+              "content-type" => (format == :html ? "text/html; charset=utf-8" : "application/json; charset=utf-8")
+            )
+            response.merge(
+              headers: headers,
+              body: format == :html ? render_html_view(model) : render_json_view(model)
+            )
           end
 
-          def render_view(model)
-            #{compiled_view.lines.map { |line| "            #{line}" }.join}
+          def requested_format(request)
+            accept = request.fetch("headers", {}).fetch("accept", "").to_s.downcase
+            accept.include?("text/html") ? :html : :json
+          end
+
+          def render_json_view(model)
+            #{compiled_json_view.lines.map { |line| "            #{line}" }.join}
+          end
+
+          def render_html_view(model)
+            #{compiled_html_view.lines.map { |line| "            #{line}" }.join}
           end
         end
       end
@@ -231,7 +254,7 @@ def write_lambda_route_handler(path, route)
 
           def call(request)
             response = OresApp::PhysicalRouteHandlers::#{physical_route_const(route)}.call(request)
-            OresGenerated::Presenters::#{const}.call(response)
+            OresGenerated::Presenters::#{const}.call(response, request)
           end
         end
       end
@@ -370,7 +393,7 @@ end
 
 def graal_unit_source(routes)
   cases = routes.map do |route|
-    "when #{route_id(route).inspect} then OresGenerated::Presenters::#{route_const(route)}.call(OresApp::PhysicalRouteHandlers::#{physical_route_const(route)}.call(request))"
+    "when #{route_id(route).inspect} then OresGenerated::Presenters::#{route_const(route)}.call(OresApp::PhysicalRouteHandlers::#{physical_route_const(route)}.call(request), request)"
   end.join("\n          ")
 
   String.new(<<~RUBY)

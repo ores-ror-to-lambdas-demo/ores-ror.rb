@@ -15,7 +15,7 @@ class OresEndpointController < ApplicationController
         "method" => request.request_method,
         "path" => request.path,
         "query" => request.query_parameters,
-        "headers" => request.headers.to_h.select { |name, _| %w[content-type x-request-id].include?(name.to_s.downcase) },
+        "headers" => request.headers.to_h.select { |name, _| %w[accept content-type x-request-id].include?(name.to_s.downcase) },
         "content_type" => request.content_type,
         "body" => parsed_body,
         "path_params" => path_params
@@ -33,9 +33,10 @@ class OresEndpointController < ApplicationController
     payload = JSON.parse(payload) if payload.is_a?(String)
     model = endpoint_model_class.new(payload)
 
+    format = request.headers["Accept"].to_s.downcase.include?("text/html") ? :html : :json
     render(
       template: "#{self.class.controller_path}/#{action_name}",
-      formats: [:json],
+      formats: [format],
       locals: { model: model },
       status: result.fetch("status")
     )

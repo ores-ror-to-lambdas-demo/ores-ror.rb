@@ -16,11 +16,28 @@ class ApplicationModel
   end
 
   def json_view
-    json = JSON.generate(to_h)
-    json.respond_to?(:html_safe) ? json.html_safe : json
+    mark_html_safe(JSON.generate(to_h))
+  end
+
+  def html_json_view
+    escaped = JSON.generate(to_h)
+      .gsub("&", "&amp;")
+      .gsub("<", "&lt;")
+      .gsub(">", "&gt;")
+      .gsub('"', "&quot;")
+      .gsub("'", "&#39;")
+    mark_html_safe(escaped)
+  end
+
+  def view_title
+    self.class.name
   end
 
   private
+
+  def mark_html_safe(value)
+    value.respond_to?(:html_safe) ? value.html_safe : value
+  end
 
   def normalize(value)
     case value

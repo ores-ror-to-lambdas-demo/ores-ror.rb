@@ -9,9 +9,9 @@ class RuntimeContractTest < ActionDispatch::IntegrationTest
     payload = JSON.parse(response.body)
     assert_equal true, payload.fetch("ok")
     assert_equal "ores-ror.rb", payload.fetch("service")
-    assert_equal "rails", payload.fetch("execution_mode")
-    assert payload.fetch("runtime").is_a?(String)
     assert_equal "contract-health", response.headers["x-request-id"]
+    assert_equal "rails", response.headers["x-ores-execution-mode"]
+    assert response.headers["x-ores-runtime"].to_s.length > 0
     assert_equal "application/json", response.media_type
     assert HealthzRecord < ApplicationModel
   end

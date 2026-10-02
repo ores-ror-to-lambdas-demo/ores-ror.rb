@@ -2,10 +2,12 @@
 
 Rails.application.routes.draw do
   get "/users/:id", to: "users/show/endpoint#show", as: :user
+  get "/users/:id/activity", to: "users/activity/endpoint#show", as: :user_activity
   get "/carts/:id", to: "carts/show/endpoint#show", as: :cart
   post "/checkout-sessions/:id", to: "checkout_sessions/create/endpoint#create", as: :checkout_session
   get "/products/:id", to: "products/show/endpoint#show", as: :product
   get "/orders/:id", to: "orders/show/endpoint#show", as: :order
+  get "/orders/:id/receipt", to: "orders/receipt/endpoint#show", as: :order_receipt
   post "/orders/:id/cancel", to: "orders/cancel/endpoint#cancel", as: :cancel_order
   get "/accounts/:id", to: "accounts/show/endpoint#show", as: :account
   get "/inventory/:id", to: "inventory/show/endpoint#show", as: :inventory

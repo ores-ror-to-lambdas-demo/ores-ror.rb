@@ -255,7 +255,9 @@ module OresBuild
 
       view_files = Dir.glob(@root.join("app/views", controller, "#{action}.*").to_s).sort.map { |file| relative(Pathname(file)) }
       fail! "Rails convention expected a view for #{controller}##{action}" if view_files.empty?
-      fail! "Rails-free runtime currently requires a .json.erb view for #{controller}##{action}" unless view_files.any? { |file| file.end_with?(".json.erb") }
+      %w[json html].each do |format|
+        fail! "Rails-free runtime requires a .#{format}.erb view for #{controller}##{action}" unless view_files.any? { |file| file.end_with?(".#{format}.erb") }
+      end
 
       route = {
         verb: verb,
