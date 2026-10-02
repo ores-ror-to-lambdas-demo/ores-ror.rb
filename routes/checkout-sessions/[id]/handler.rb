@@ -1,12 +1,11 @@
 # frozen_string_literal: true
 
 module OresApp
-  module RouteHandlers
+  module PhysicalRouteHandlers
     module CheckoutSession
       module_function
-
       def call(request)
-        Handlers.call("checkout_session", request)
+        OresApp::Handlers.call("checkout_sessions/create/endpoint", "create", request)
       end
     end
   end

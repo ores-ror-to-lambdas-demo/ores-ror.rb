@@ -1,4 +1,4 @@
-FROM oraclelinux:9-slim
+FROM oraclelinux:9-slim AS truffleruby-base
 
 ARG TARGETARCH
 ARG TRUFFLERUBY_VERSION=34.0.1
@@ -11,12 +11,8 @@ RUN microdnf install -y \
 
 RUN set -eux; \
     case "$TARGETARCH" in \
-      amd64) \
-        TR_ARCH=amd64; \
-        TR_SHA256=d73540e36d457555d57c7bff7c35805d05388912fb54a880dea10cc44d001f41 ;; \
-      arm64) \
-        TR_ARCH=aarch64; \
-        TR_SHA256=8b1156eda10f3a00c56544f91c3f06735db49fe5850d801bb2760ab0b8315441 ;; \
+      amd64) TR_ARCH=amd64; TR_SHA256=d73540e36d457555d57c7bff7c35805d05388912fb54a880dea10cc44d001f41 ;; \
+      arm64) TR_ARCH=aarch64; TR_SHA256=8b1156eda10f3a00c56544f91c3f06735db49fe5850d801bb2760ab0b8315441 ;; \
       *) echo "unsupported TARGETARCH: $TARGETARCH" >&2; exit 1 ;; \
     esac; \
     URL="https://github.com/truffleruby/truffleruby/releases/download/graal-${TRUFFLERUBY_VERSION}/truffleruby-community-${TRUFFLERUBY_VERSION}-linux-${TR_ARCH}.tar.gz"; \
@@ -27,22 +23,29 @@ RUN set -eux; \
     rm -f /tmp/truffleruby.tar.gz; \
     /opt/truffleruby/lib/truffle/post_install_hook.sh
 
-ENV PATH=/opt/truffleruby/bin:${PATH} \
-    BUNDLE_PATH=/opt/ores-ror-bundle \
-    BUNDLE_GEMFILE=/var/task/Gemfile \
-    BUNDLE_WITHOUT=rails:test \
-    ORES_BUILD_TARGET=lambda
-
+ENV PATH=/opt/truffleruby/bin:${PATH}
 WORKDIR /var/task
 
+FROM truffleruby-base AS runtime
+
+ENV BUNDLE_PATH=/opt/ores-ror-bundle \
+    BUNDLE_GEMFILE=/var/task/Gemfile \
+    BUNDLE_WITHOUT=rails:test \
+    ORES_BUILD_TARGET=lambda \
+    ORES_LAMBDA_HANDLER_GRANULARITY=route
+
 COPY Gemfile ./Gemfile
-RUN truffleruby --version \
-    && bundle install --jobs 4 --retry 3
+RUN bundle install --jobs 4 --retry 3 \
+    && truffleruby -e 'abort "rails gem present" unless Gem::Specification.find_all_by_name("rails").empty?' \
+    && bundle exec truffleruby -e 'require "connection_pool"; require "base64"'
 
 COPY . /var/task
-RUN ORES_BUILD_TARGET=lambda truffleruby bin/build-runtime \
+
+RUN truffleruby bin/build-runtime \
     && test -f generated/lambda/manifest.json \
     && test -f generated/lambda/entrypoint.rb \
+    && test -f 'generated/lambda/routes/users/[id]/_get/handler.rb' \
+    && ! grep -R -E 'config/environment|Rails\.application' generated/lambda \
     && mkdir -p /var/runtime \
     && cp /var/task/aws-lambda/bootstrap /var/runtime/bootstrap \
     && chmod 0755 /var/runtime/bootstrap
