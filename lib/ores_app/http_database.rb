@@ -4,6 +4,12 @@ require_relative "json_codec"
 require "uri"
 
 module OresApp
+  module GraalCapabilities
+    class << self
+      attr_accessor :http
+    end
+  end
+
   class HttpDatabase
     class Error < StandardError; end
 
@@ -15,9 +21,10 @@ module OresApp
 
     class GraalTransport
       def self.request(method, path, body:, query:)
-        raise Error, "Graal host HTTP bridge is unavailable" unless defined?(ORES_GS_HTTP)
+        bridge = OresApp::GraalCapabilities.http
+        raise Error, "Graal host HTTP bridge is unavailable" unless bridge
 
-        raw = ORES_GS_HTTP.call(JsonCodec.generate({
+        raw = bridge.call(JsonCodec.generate({
           method: method.to_s.upcase,
           path: path,
           query: query || {},
