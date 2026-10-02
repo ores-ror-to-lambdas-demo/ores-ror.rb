@@ -23,45 +23,46 @@ RUN set -eux; \
     rm -f /tmp/truffleruby.tar.gz; \
     /opt/truffleruby/lib/truffle/post_install_hook.sh
 
-ENV PATH=/opt/truffleruby/bin:${PATH}
+ENV PATH=/opt/truffleruby/bin:${PATH} \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
 
-FROM truffleruby-base AS deps
-ENV BUNDLE_PATH=/opt/ores-ror-bundle \
-    BUNDLE_WITHOUT=rails:test
-WORKDIR /src
-COPY Gemfile ./Gemfile
-RUN bundle install --jobs 4 --retry 3 \
-    && truffleruby -e 'abort "rails gem present" unless Gem::Specification.find_all_by_name("rails").empty?' \
-    && bundle exec truffleruby -e 'require "connection_pool"; require "base64"'
-
-FROM deps AS codegen
-ENV BUNDLE_GEMFILE=/src/Gemfile \
-    ORES_BUILD_TARGET=lambda \
+FROM truffleruby-base AS codegen
+ENV ORES_BUILD_TARGET=lambda \
     ORES_LAMBDA_HANDLER_GRANULARITY=route
+WORKDIR /src
 COPY . /src
-RUN truffleruby bin/build-runtime \
+RUN truffleruby -e 'abort "Rails constant unexpectedly loaded" if defined?(Rails)' \
+    && truffleruby bin/build-runtime \
     && test -f generated/lambda/manifest.json \
     && test -f generated/lambda/entrypoint.rb \
     && test -f app/controllers/users/show/handler.rb \
     && ! grep -R -E 'config/environment|Rails\.application' generated/lambda
 
+FROM truffleruby-base AS deps
+ENV BUNDLE_PATH=/opt/ores-ror-bundle \
+    BUNDLE_GEMFILE=/src/Gemfile
+WORKDIR /src
+COPY aws-lambda/Gemfile.runtime ./Gemfile
+RUN bundle install --jobs 4 --retry 3 \
+    && bundle exec truffleruby -e 'require "connection_pool"; require "base64"; abort "Rails gem present" unless Gem::Specification.find_all_by_name("rails").empty?'
+
 FROM truffleruby-base AS runtime
 ENV BUNDLE_PATH=/opt/ores-ror-bundle \
     BUNDLE_GEMFILE=/var/task/Gemfile \
-    BUNDLE_WITHOUT=rails:test \
     ORES_BUILD_TARGET=lambda
 WORKDIR /var/task
 
 COPY --from=deps /opt/ores-ror-bundle /opt/ores-ror-bundle
-COPY Gemfile ./Gemfile
+COPY aws-lambda/Gemfile.runtime ./Gemfile
 COPY --from=codegen /src/generated/lambda ./generated/lambda
 COPY --from=codegen /src/lib/ores_app ./lib/ores_app
-COPY --from=codegen /src/aws-lambda ./aws-lambda
+COPY --from=codegen /src/aws-lambda/bootstrap ./aws-lambda/bootstrap
+COPY --from=codegen /src/aws-lambda/runtime.rb ./aws-lambda/runtime.rb
 
 RUN test ! -e config/environment.rb \
     && test ! -d app/controllers \
-    && truffleruby -e 'abort "rails gem present" unless Gem::Specification.find_all_by_name("rails").empty?' \
-    && bundle exec truffleruby -e 'require "connection_pool"; require "base64"' \
+    && bundle exec truffleruby -e 'require "connection_pool"; require "base64"; abort "Rails gem present" unless Gem::Specification.find_all_by_name("rails").empty?' \
     && mkdir -p /var/runtime \
     && cp /var/task/aws-lambda/bootstrap /var/runtime/bootstrap \
     && chmod 0755 /var/runtime/bootstrap
