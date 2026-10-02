@@ -136,6 +136,7 @@ jobs:
           fi
 
           printf '%s\n' '# GENERATED ORES RAILS-FREE HANDLER. DO NOT EDIT OR COMMIT.' > "$RUNNER_TEMP/fake-handler.rb"
+          rm -f app/controllers/users/show/handler.rb
           ln -s "$RUNNER_TEMP/fake-handler.rb" app/controllers/users/show/handler.rb
           if ORES_BUILD_TARGET=lambda ruby bin/build-runtime; then
             echo "symlinked generated handler sidecar unexpectedly passed" >&2
