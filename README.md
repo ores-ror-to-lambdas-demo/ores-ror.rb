@@ -1,6 +1,6 @@
 # ores-ror.rb
 
-One application repository, two execution modes, one route/middleware/business-logic source of truth.
+One application repository, two execution modes, one route/middleware/controller source of truth.
 
 ## Repository boundary
 
@@ -66,7 +66,7 @@ generated/lambda + generated/graal
 AWS Lambda infra   Graal infra
 ```
 
-Both Rails and generated Graal/Lambda paths therefore continue to execute the same route middleware chain, committed route adapter, models, views, and business handlers.
+Both Rails and generated Graal/Lambda paths execute the same real controller action, controller callbacks, per-route middleware chain, models, and Action View templates. The committed `routes/**/handler.rb` adapter imports its mapped controller and invokes that controller directly; the compiler rejects adapters that bypass the controller through `OresApp::Handlers.call`.
 
 ## Source route filesystem
 
@@ -108,10 +108,26 @@ generated/
     └── groups/...
 ```
 
-They are generated and ignored by Git.
+They are generated and ignored by Git. Generated route units embed executable controller/model source and route ERB templates; the templates are installed into an in-memory Action View resolver, so Graal/Lambda can use native Action View rendering without reading application view files at request time.
+
+## Direct controller execution
+
+The Rails path is:
+
+```text
+HTTP -> Rails router -> real controller action -> controller callbacks/middleware -> model -> Action View
+```
+
+The Graal/Lambda path is:
+
+```text
+event -> generated route match -> routes/**/handler.rb -> same real controller action -> same controller callbacks/middleware -> same model -> Action View -> captured Rack response
+```
+
+Graal/Lambda do not boot `Rails.application`, the Rails router, initializers, or Puma. They intentionally load the standalone Action Pack and Action View components required to execute `Controller.action(name).call(rack_env)` and render the application's templates. Per-route ORES middleware is attached as an `around_action` on `OresEndpointController`, so a custom action does not need to call `dispatch_ores_endpoint` to receive the same middleware behavior.
 
 ## Cross-runtime proof
 
-CI executes normal Rails and Rails-free Graal against all application routes in both JSON and HTML. It compares the exported contracts exactly, including per-route middleware chains and middleware-derived response headers.
+CI executes normal Rails and Rails-free Graal against all application routes in both JSON and HTML. It compares the exported contracts exactly, including controller-produced payloads, per-route middleware chains, middleware-derived response headers, and rendered representations. A product route intentionally contains custom controller logic and never calls `dispatch_ores_endpoint`; that route is part of the parity suite.
 
 The migration of runtime folders to `ores-ror.infra` is guarded by the same tests: app CI checks out the infra repo explicitly, asserts this app checkout contains neither `graal/` nor `aws-lambda/`, then reruns the complete matrix.

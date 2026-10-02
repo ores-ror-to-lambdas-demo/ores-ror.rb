@@ -1,11 +1,15 @@
 # frozen_string_literal: true
 
+require_relative "../../../app/controllers/ores_endpoint_controller"
+require_relative "../../../app/controllers/orders/show/endpoint_controller"
+
 module OresApp
   module PhysicalRouteHandlers
     module Order
       module_function
+
       def call(request)
-        OresApp::Handlers.call("orders/show/endpoint", "show", request)
+        Orders::Show::EndpointController.call_ores_action("show", request)
       end
     end
   end
