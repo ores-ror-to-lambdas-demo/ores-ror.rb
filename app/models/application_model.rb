@@ -15,6 +15,11 @@ class ApplicationModel
     attributes
   end
 
+  def json_view
+    json = JSON.generate(to_h)
+    json.respond_to?(:html_safe) ? json.html_safe : json
+  end
+
   private
 
   def normalize(value)
