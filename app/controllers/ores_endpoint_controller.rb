@@ -42,7 +42,10 @@ class OresEndpointController < ApplicationController
   end
 
   def endpoint_model_class
-    self.class.controller_path.split("/").first.singularize.camelize.constantize
+    resource = self.class.controller_path.split("/").first
+    singular = resource.singularize
+    token = singular == resource ? "#{resource}_record" : singular
+    token.camelize.constantize
   end
 
   def parsed_body

@@ -9,6 +9,9 @@ Dir.mktmpdir("ores-static-routes") do |root|
   FileUtils.mkdir_p(File.join(root, "config"))
   FileUtils.mkdir_p(File.join(root, "app/controllers/admin"))
   FileUtils.mkdir_p(File.join(root, "app/controllers/api"))
+  FileUtils.mkdir_p(File.join(root, "app/models"))
+  FileUtils.mkdir_p(File.join(root, "app/views/admin/users"))
+  FileUtils.mkdir_p(File.join(root, "app/views/api/widgets"))
 
   File.write(File.join(root, "config/routes.rb"), <<~ROUTES)
     Rails.application.routes.draw do
@@ -40,6 +43,17 @@ Dir.mktmpdir("ores-static-routes") do |root|
       end
     end
   RUBY
+
+  File.write(File.join(root, "app/models/application_model.rb"), "class ApplicationModel; end\n")
+  File.write(File.join(root, "app/models/user.rb"), "class User < ApplicationModel; end\n")
+  File.write(File.join(root, "app/models/widget.rb"), "class Widget < ApplicationModel; end\n")
+
+  %w[index show].each do |action|
+    File.write(File.join(root, "app/views/admin/users/#{action}.json.erb"), "<%= JSON.generate(model.to_h) %>\n")
+  end
+  %w[index show update].each do |action|
+    File.write(File.join(root, "app/views/api/widgets/#{action}.json.erb"), "<%= JSON.generate(model.to_h) %>\n")
+  end
 
   routes = OresBuild::StaticRoutes.new(root).compile
   pairs = routes.map { |route| [route.fetch(:verb), route.fetch(:path), route.fetch(:controller), route.fetch(:action)] }

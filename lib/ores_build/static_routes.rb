@@ -247,7 +247,7 @@ module OresBuild
       fail! "Rails convention expected #{controller}##{action} in #{relative(controller_file)}" unless source_defines_action?(controller_file, action)
 
       group_name = group || top_group(controller)
-      model_token = singularize(group_name)
+      model_token = model_token_for(controller)
       model_class = camelize(model_token)
       model_file = @root.join("app/models/#{model_token}.rb")
       fail! "Rails convention expected model file #{relative(model_file)}" unless model_file.file?
@@ -461,6 +461,13 @@ module OresBuild
       return value[0...-3] + "y" if value.end_with?("ies")
       return value[0...-1] if value.end_with?("s") && !value.end_with?("ss")
       value
+    end
+
+    def model_token_for(controller)
+      pieces = controller.to_s.split("/")
+      resource = pieces.last == "endpoint" ? pieces.first : pieces.last
+      singular = singularize(resource)
+      singular == resource ? "#{resource}_record" : singular
     end
 
     def pluralize(value)
