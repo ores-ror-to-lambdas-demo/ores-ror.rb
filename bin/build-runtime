@@ -71,6 +71,7 @@ end
 APPLICATION_MODEL_FILE = "app/models/application_model.rb"
 APPLICATION_CONTROLLER_FILE = "app/controllers/application_controller.rb"
 ORES_ENDPOINT_CONTROLLER_FILE = "app/controllers/ores_endpoint_controller.rb"
+JSON_CODEC_FILE = "lib/ores_app/json_codec.rb"
 CONTROLLER_RUNTIME_FILE = "lib/ores_app/controller_runtime.rb"
 VIEW_RUNTIME_FILE = "lib/ores_app/view_runtime.rb"
 ROUTE_HANDLER_MODE = ENV.fetch("ORES_ROUTE_HANDLER_MODE", "hybrid").downcase
@@ -150,11 +151,11 @@ def shared_runtime_source(mode)
   RUBY
   source << "ORES_GRAAL_RUNTIME = true unless defined?(ORES_GRAAL_RUNTIME)\n" if mode == "graal"
   source << <<~RUBY
-    require "json"
     require "erb"
   RUBY
 
   [
+    JSON_CODEC_FILE,
     "lib/ores_app/routes.rb",
     "lib/ores_app/middleware.rb",
     "lib/ores_app/http_database.rb",
