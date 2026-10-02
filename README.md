@@ -143,7 +143,7 @@ The generated runtime uses a small plain-Ruby request/response/controller compat
 The two execution modes intentionally have different hosting models:
 
 - **Rails/Puma:** normal Rails server execution with a bounded worker-thread pool; production defaults are 50 minimum / 300 maximum threads.
-- **Graal:** one long-lived TruffleRuby `Context` per route or route-group isolate, entered by a bounded host thread pool of 5.
+- **Graal:** one long-lived TruffleRuby `Context` per route or route-group isolate, with execution multiplexed over one bounded process-wide host thread pool shared by all isolates; each isolate separately admits at most 5 concurrent entries.
 - **Lambda:** normal Lambda execution-environment concurrency around generated Rails-free Ruby.
 
 Request identity must never equal physical thread identity.
@@ -158,8 +158,10 @@ The generated Graal manifest declares:
 
 - one process-shared Graal `Engine`;
 - one long-lived Ruby `Context` per route/group isolate;
-- `host_thread_pool_size_per_context: 5`;
-- execution/admission bounded to 5;
+- `host_thread_pool_scope: process-shared`;
+- host OS threads are reusable across different isolate Contexts with no per-isolate thread affinity;
+- the global pool size is an infra/runtime setting rather than multiplied by isolate count;
+- execution/admission remains bounded to 5 per isolate;
 - explicit per-invocation request state;
 - thread identity is not request identity;
 - Rails boot disabled;
@@ -183,7 +185,7 @@ CI verifies:
 - Rails-free static code generation;
 - generated sidecars are ignored and convention-derived;
 - Rails-free Lambda image construction and invocation;
-- five-thread warm-Context request-state cleanup;
+- shared-thread-pool warm-Context request-state cleanup;
 - route/group Graal generation;
 - exact Rails-vs-Graal behavior across every demo route in JSON and HTML;
 - symlink/path/output trust-boundary failures are rejected.
