@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require_relative "json_codec"
-require "uri"
+require_relative "url_codec"
 require_relative "routes"
 require_relative "middleware"
 require_relative "handlers"
@@ -78,7 +78,7 @@ module OresApp
 
     def parse_query_string(query_string)
       return {} if query_string.nil? || query_string.to_s.empty?
-      URI.decode_www_form(query_string.to_s).each_with_object({}) do |(key, value), out|
+      UrlCodec.decode_www_form(query_string.to_s).each_with_object({}) do |(key, value), out|
         if out.key?(key)
           out[key] = Array(out[key]) << value
         else
