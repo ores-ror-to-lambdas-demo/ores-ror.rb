@@ -9,7 +9,7 @@ module OresApp
       module_function
 
       def call(request)
-        Search::Index::EndpointController.call_ores_action("index", request)
+        ::Search::Index::EndpointController.call_ores_action("index", request)
       end
     end
   end

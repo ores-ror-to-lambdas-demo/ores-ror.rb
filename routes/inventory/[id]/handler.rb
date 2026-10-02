@@ -9,7 +9,7 @@ module OresApp
       module_function
 
       def call(request)
-        Inventory::Show::EndpointController.call_ores_action("show", request)
+        ::Inventory::Show::EndpointController.call_ores_action("show", request)
       end
     end
   end

@@ -9,7 +9,7 @@ module OresApp
       module_function
 
       def call(request)
-        Sessions::Create::EndpointController.call_ores_action("create", request)
+        ::Sessions::Create::EndpointController.call_ores_action("create", request)
       end
     end
   end

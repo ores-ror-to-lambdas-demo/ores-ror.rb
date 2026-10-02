@@ -9,7 +9,7 @@ module OresApp
       module_function
 
       def call(request)
-        Orders::Cancel::EndpointController.call_ores_action("cancel", request)
+        ::Orders::Cancel::EndpointController.call_ores_action("cancel", request)
       end
     end
   end
