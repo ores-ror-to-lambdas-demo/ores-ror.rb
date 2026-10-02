@@ -1,5 +1,6 @@
 # frozen_string_literal: true
 
+require "json"
 require_relative "../../lib/ores_app/dispatcher"
 
 class OresEndpointController < ApplicationController
@@ -23,9 +24,28 @@ class OresEndpointController < ApplicationController
       action: action_name
     )
 
-    result.fetch("headers", {}).each { |name, value| response.set_header(name, value) }
-    self.status = result.fetch("status")
-    self.response_body = result.fetch("body")
+    result.fetch("headers", {}).each do |name, value|
+      next if %w[content-length content-type].include?(name.to_s.downcase)
+      response.set_header(name, value)
+    end
+
+    payload = result.fetch("body")
+    payload = JSON.parse(payload) if payload.is_a?(String)
+    model = endpoint_model_class.new(payload)
+
+    render(
+      template: "#{self.class.controller_path}/#{action_name}",
+      formats: [:json],
+      locals: { model: model },
+      status: result.fetch("status")
+    )
+  end
+
+  def endpoint_model_class
+    resource = self.class.controller_path.split("/").first
+    singular = resource.singularize
+    token = singular == resource ? "#{resource}_record" : singular
+    token.camelize.constantize
   end
 
   def parsed_body
