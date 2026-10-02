@@ -1,0 +1,7 @@
+.git
+.ores-infra
+vendor/bundle
+vendor/bundle-*
+log
+tmp
+generated
