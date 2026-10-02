@@ -11,18 +11,17 @@ module OresBuild
     HTTP_VERBS = %w[get post put patch delete options head].freeze
     RESOURCE_ACTIONS = %w[index create new show edit update destroy].freeze
     SINGLETON_ACTIONS = %w[new create show edit update destroy].freeze
-    ROUTE_ANNOTATION = /^\s*#\s*ores-route:\s*(GET|POST|PUT|PATCH|DELETE|OPTIONS|HEAD)\s+(\S+)\s+action=([A-Za-z_][A-Za-z0-9_]*)\s*$/i.freeze
 
     Context = Struct.new(:path_prefix, :module_prefix, :as_prefix, :group, :parent_resource, keyword_init: true)
 
     def initialize(root)
-      @root = Pathname(root)
+      @root = Pathname(root).realpath
       @routes_file = @root.join("config/routes.rb")
       @routes = []
     end
 
     def compile
-      source = @routes_file.read
+      source = read_confined!(@routes_file, "routes authority")
       sexp = Ripper.sexp(source)
       fail! "cannot parse #{@routes_file}" unless sexp
       draw = find_draw_block(sexp)
@@ -255,28 +254,20 @@ module OresBuild
     def add_route(verb, path, controller, action, name, group, middleware: nil, duplicate_name_ok: false)
       controller_file = controller_file_for(controller)
       fail! "Rails convention expected controller file #{relative(controller_file)}" unless controller_file.file?
+      controller_file = confined_file!(controller_file, "controller source")
       fail! "Rails convention expected #{controller}##{action} in #{relative(controller_file)}" unless source_defines_action?(controller_file, action)
-
-      annotations = controller_route_annotations(controller_file)
-      normalized_path = normalize_path(path)
-      annotation = annotations.find do |entry|
-        entry.fetch(:verb) == verb &&
-          entry.fetch(:path) == normalized_path &&
-          entry.fetch(:action) == action.to_s
-      end
-      if annotations.any? && annotation.nil?
-        expected = "# ores-route: #{verb} #{normalized_path} action=#{action}"
-        fail! "controller route annotations in #{relative(controller_file)} do not declare #{expected}"
-      end
 
       group_name = group || top_group(controller)
       model_token = model_token_for(controller)
       model_class = camelize(model_token)
       model_file = @root.join("app/models/#{model_token}.rb")
       fail! "Rails convention expected model file #{relative(model_file)}" unless model_file.file?
+      model_file = confined_file!(model_file, "model source")
       fail! "Rails convention expected model class #{model_class} in #{relative(model_file)}" unless source_defines_class?(model_file, model_class)
 
-      view_files = Dir.glob(@root.join("app/views", controller, "#{action}.*").to_s).sort.map { |file| relative(Pathname(file)) }
+      view_files = Dir.glob(@root.join("app/views", controller, "#{action}.*").to_s).sort.map do |file|
+        relative(confined_file!(Pathname(file), "view source"))
+      end
       fail! "Rails convention expected a view for #{controller}##{action}" if view_files.empty?
       %w[json html].each do |format|
         fail! "Rails-free runtime requires a .#{format}.erb view for #{controller}##{action}" unless view_files.any? { |file| file.end_with?(".#{format}.erb") }
@@ -290,8 +281,6 @@ module OresBuild
         controller_class: controller_class_name(controller),
         action: action,
         controller_file: relative(controller_file),
-        controller_route_annotation: annotation && annotation.fetch(:declaration),
-        controller_route_annotated: !annotation.nil?,
         model_class: model_class,
         model_file: relative(model_file),
         view_logical_path: "#{controller}/#{action}",
@@ -314,24 +303,8 @@ module OresBuild
       direct
     end
 
-    def controller_route_annotations(file)
-      file.read.each_line.filter_map do |line|
-        next unless line.match?(/^\s*#\s*ores-route:/i)
-
-        match = ROUTE_ANNOTATION.match(line)
-        fail! "malformed ores-route annotation in #{relative(file)}: #{line.strip.inspect}" unless match
-
-        {
-          verb: match[1].upcase,
-          path: normalize_path(match[2]),
-          action: match[3],
-          declaration: "# ores-route: #{match[1].upcase} #{normalize_path(match[2])} action=#{match[3]}"
-        }
-      end
-    end
-
     def source_defines_action?(file, action)
-      sexp = Ripper.sexp(file.read)
+      sexp = Ripper.sexp(read_confined!(file, "controller source"))
       return false unless sexp
       found = false
       walk(sexp) do |node|
@@ -346,7 +319,7 @@ module OresBuild
     end
 
     def source_defines_class?(file, class_name)
-      file.read.match?(/^\s*class\s+#{Regexp.escape(class_name)}\b/)
+      read_confined!(file, "model source").match?(/^\s*class\s+#{Regexp.escape(class_name)}\b/)
     end
 
     def validate_unique!
@@ -555,6 +528,35 @@ module OresBuild
 
     def generated_name(verb, path, controller, action)
       "rails_#{Digest::SHA256.hexdigest("#{verb} #{path} #{controller}##{action}")[0, 12]}"
+    end
+
+    def confined_file!(path, label)
+      path = Pathname(path)
+      relative_path = path.relative_path_from(@root)
+      fail! "#{label} escapes application root: #{path}" if relative_path.to_s.start_with?("../")
+
+      cursor = @root
+      relative_path.each_filename do |segment|
+        cursor = cursor.join(segment)
+        begin
+          stat = File.lstat(cursor.to_s)
+        rescue Errno::ENOENT
+          fail! "#{label} does not exist: #{relative_path}"
+        end
+        fail! "#{label} contains a symlink: #{relative_path}" if stat.symlink?
+      end
+
+      resolved = path.realpath
+      root_prefix = @root.to_s + File::SEPARATOR
+      fail! "#{label} escapes application root: #{relative_path}" unless resolved.to_s.start_with?(root_prefix)
+      fail! "#{label} is not a regular file: #{relative_path}" unless resolved.file?
+      resolved
+    rescue ArgumentError
+      fail! "#{label} escapes application root: #{path}"
+    end
+
+    def read_confined!(path, label)
+      confined_file!(path, label).read
     end
 
     def relative(path)

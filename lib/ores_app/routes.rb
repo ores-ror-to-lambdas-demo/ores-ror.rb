@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "uri"
+require_relative "url_codec"
 
 module OresApp
   module Routes
@@ -21,7 +21,7 @@ module OresApp
         match = route_pattern(route.path).match(path.to_s)
         next unless match
 
-        params = match.named_captures.transform_values { |value| URI.decode_www_form_component(value) }
+        params = match.named_captures.transform_values { |value| UrlCodec.decode_www_form_component(value) }
         return [route, params]
       end
       nil

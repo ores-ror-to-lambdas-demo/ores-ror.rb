@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require_relative "json_codec"
-require "uri"
 
 module OresApp
   class HttpDatabase
@@ -35,6 +34,7 @@ module OresApp
     end
 
     unless GRAAL_RUNTIME
+      require "uri"
       require "connection_pool"
       require "net/http"
 
@@ -107,10 +107,6 @@ module OresApp
       BASE_URL = ENV.fetch("DATA_API_URL", "http://127.0.0.1:8787/v1")
       TOKEN = ENV.fetch("DATA_API_TOKEN", "")
 
-      # Rails can have up to 50 request-processing threads by default. Keep the
-      # HTTP pool at the same ceiling so the data layer cannot become an
-      # accidental 20-connection bottleneck. Rails-free runtimes retain a small
-      # default because Lambda/Graal own concurrency differently.
       default_pool_size = defined?(Rails) ? Integer(ENV.fetch("RAILS_MAX_THREADS", "50")) : 5
       POOL_SIZE = Integer(ENV.fetch("DATA_API_HTTP_POOL_SIZE", default_pool_size.to_s))
       raise Error, "DATA_API_HTTP_POOL_SIZE must be between 1 and 50" unless POOL_SIZE.between?(1, 50)
