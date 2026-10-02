@@ -260,7 +260,7 @@ jobs:
           cat lambda-response.json
           grep -q '"statusCode":200' lambda-response.json
           grep -Fq '"x-ores-execution-mode":"lambda"' lambda-response.json
-          grep -q '"x-ores-runtime":"truffleruby-graal"' lambda-response.json
+          grep -q '"x-ores-runtime":"truffleruby"' lambda-response.json
       - if: failure()
         run: docker logs ores-ror-lambda || true
       - if: always()
@@ -282,6 +282,7 @@ jobs:
       - name: Export every Rails route in JSON and HTML with mocked data
         env:
           ORES_BUILD_TARGET: rails
+          RAILS_ENV: test
         run: bundle exec rails runner script/rails-contract-export.rb /tmp/rails-contract.json
       - name: Export every Graal route in JSON and HTML without Rails
         env:
