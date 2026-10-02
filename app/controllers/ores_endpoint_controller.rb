@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "json"
+require_relative "../../lib/ores_app/json_codec"
 require_relative "application_controller"
 require_relative "../../lib/ores_app/controller_runtime"
 require_relative "../../lib/ores_app/handlers"
@@ -40,7 +40,7 @@ module OresEndpointBehavior
     end
 
     payload = result.fetch(:body)
-    payload = JSON.parse(payload) if payload.is_a?(String)
+    payload = OresApp::JsonCodec.parse(payload) if payload.is_a?(String)
     model = endpoint_model_class.new(payload)
 
     format = request.headers["Accept"].to_s.downcase.include?("text/html") ? :html : :json
@@ -86,10 +86,10 @@ module OresEndpointBehavior
   def parsed_body
     raw = request.raw_post.to_s
     return nil if raw.empty?
-    return JSON.parse(raw) if request.content_type.to_s.include?("json")
+    return OresApp::JsonCodec.parse(raw) if request.content_type.to_s.include?("json")
 
     raw
-  rescue JSON::ParserError => error
+  rescue OresApp::JsonCodec::ParseError => error
     raise OresApp::BadRequest, "invalid JSON body: #{error.message}"
   end
 end
@@ -161,7 +161,7 @@ else
     private
 
     def render_error(status, message)
-      body = JSON.generate(ok: false, error: message)
+      body = OresApp::JsonCodec.generate(ok: false, error: message)
       {
         status: status,
         headers: { "content-type" => "application/json; charset=utf-8" },

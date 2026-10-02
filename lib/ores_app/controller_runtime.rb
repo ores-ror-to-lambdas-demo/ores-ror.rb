@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "json"
+require_relative "json_codec"
 
 module OresApp
   class BadRequest < StandardError; end
@@ -35,7 +35,7 @@ module OresApp
       @headers = PlainHeaders.new(request.fetch("headers", {}))
       @content_type = request["content_type"].to_s
       @content_type = @headers["content-type"].to_s if @content_type.empty?
-      @raw_body = request["body"].is_a?(String) ? request["body"] : (request["body"].nil? ? "" : JSON.generate(request["body"]))
+      @raw_body = request["body"].is_a?(String) ? request["body"] : (request["body"].nil? ? "" : JsonCodec.generate(request["body"]))
       @path_parameters = request.fetch("path_params", {}).each_with_object({}) do |(key, value), out|
         out[key.to_s] = value
         out[key.to_sym] = value

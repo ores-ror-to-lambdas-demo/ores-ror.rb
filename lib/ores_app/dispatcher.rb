@@ -1,6 +1,6 @@
 # frozen_string_literal: true
 
-require "json"
+require_relative "json_codec"
 require "uri"
 require_relative "routes"
 require_relative "middleware"
@@ -71,8 +71,8 @@ module OresApp
       return body unless body.is_a?(String)
       return nil if body.empty?
       return body unless content_type.downcase.include?("json")
-      JSON.parse(body)
-    rescue JSON::ParserError => error
+      JsonCodec.parse(body)
+    rescue JsonCodec::ParseError => error
       raise ArgumentError, "invalid JSON body: #{error.message}"
     end
 
@@ -92,7 +92,7 @@ module OresApp
       headers = stringify_keys(result.fetch(:headers, {})).transform_keys(&:downcase)
       headers["content-type"] ||= "application/json; charset=utf-8"
       body = result[:body]
-      body = JSON.generate(body) unless body.is_a?(String)
+      body = JsonCodec.generate(body) unless body.is_a?(String)
       { "status" => Integer(status), "headers" => headers, "body" => body }
     end
 
