@@ -26,6 +26,8 @@ Dir.mktmpdir("ores-static-routes") do |root|
   ROUTES
 
   File.write(File.join(root, "app/controllers/admin/users_controller.rb"), <<~RUBY)
+    # ores-route: GET /admin/users action=index
+    # ores-route: GET /admin/users/:id action=show
     module Admin
       class UsersController
         def index; end
@@ -35,6 +37,10 @@ Dir.mktmpdir("ores-static-routes") do |root|
   RUBY
 
   File.write(File.join(root, "app/controllers/api/widgets_controller.rb"), <<~RUBY)
+    # ores-route: GET /v1/widgets action=index
+    # ores-route: GET /v1/widgets/:id action=show
+    # ores-route: PATCH /v1/widgets/:id action=update
+    # ores-route: PUT /v1/widgets/:id action=update
     module Api
       class WidgetsController
         def index; end
@@ -68,6 +74,8 @@ Dir.mktmpdir("ores-static-routes") do |root|
     ["PUT", "/v1/widgets/:id", "api/widgets", "update"]
   ]
   raise "route compiler mismatch: #{pairs.inspect}" unless pairs == expected
+  raise "expected every smoke route to be controller-annotated" unless routes.all? { |route| route.fetch(:controller_route_annotated) }
+  raise "annotation metadata missing" unless routes.all? { |route| route.fetch(:controller_route_annotation).start_with?("# ores-route:") }
 end
 
 puts "static Rails route compiler smoke: ok"
