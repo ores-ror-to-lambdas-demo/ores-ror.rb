@@ -50,9 +50,11 @@ Dir.mktmpdir("ores-static-routes") do |root|
 
   %w[index show].each do |action|
     File.write(File.join(root, "app/views/admin/users/#{action}.json.erb"), "<%= JSON.generate(model.to_h) %>\n")
+    File.write(File.join(root, "app/views/admin/users/#{action}.html.erb"), "<pre data-ores-payload><%= model.html_json_view %></pre>\n")
   end
   %w[index show update].each do |action|
     File.write(File.join(root, "app/views/api/widgets/#{action}.json.erb"), "<%= JSON.generate(model.to_h) %>\n")
+    File.write(File.join(root, "app/views/api/widgets/#{action}.html.erb"), "<pre data-ores-payload><%= model.html_json_view %></pre>\n")
   end
 
   routes = OresBuild::StaticRoutes.new(root).compile

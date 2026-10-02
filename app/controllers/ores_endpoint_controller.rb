@@ -4,6 +4,11 @@ require "json"
 require_relative "../../lib/ores_app/dispatcher"
 
 class OresEndpointController < ApplicationController
+  # Dual-runtime endpoints must share one middleware/security contract with
+  # Rails-free Graal/Lambda. Do not let Rails-only CSRF interception create
+  # behavior that the generated runtime cannot reproduce.
+  skip_forgery_protection
+
   private
 
   def dispatch_ores_endpoint
@@ -15,7 +20,7 @@ class OresEndpointController < ApplicationController
         "method" => request.request_method,
         "path" => request.path,
         "query" => request.query_parameters,
-        "headers" => request.headers.to_h.select { |name, _| %w[content-type x-request-id].include?(name.to_s.downcase) },
+        "headers" => request.headers.to_h.select { |name, _| %w[accept content-type x-request-id].include?(name.to_s.downcase) },
         "content_type" => request.content_type,
         "body" => parsed_body,
         "path_params" => path_params
@@ -33,9 +38,10 @@ class OresEndpointController < ApplicationController
     payload = JSON.parse(payload) if payload.is_a?(String)
     model = endpoint_model_class.new(payload)
 
+    format = request.headers["Accept"].to_s.downcase.include?("text/html") ? :html : :json
     render(
       template: "#{self.class.controller_path}/#{action_name}",
-      formats: [:json],
+      formats: [format],
       locals: { model: model },
       status: result.fetch("status")
     )
@@ -49,9 +55,12 @@ class OresEndpointController < ApplicationController
   end
 
   def parsed_body
-    return nil if request.raw_post.to_s.empty?
-    return request.request_parameters if request.content_type.to_s.include?("json")
+    raw = request.raw_post.to_s
+    return nil if raw.empty?
+    return JSON.parse(raw) if request.content_type.to_s.include?("json")
 
-    request.raw_post
+    raw
+  rescue JSON::ParserError => error
+    raise ActionController::BadRequest, "invalid JSON body: #{error.message}"
   end
 end

@@ -11,10 +11,12 @@ module OresApp
 
       case key
       when "users/show/endpoint#show"                 then proxy(:get,  "/users/#{safe_id(request)}")
+      when "users/activity/endpoint#show"             then proxy(:get,  "/users/#{safe_id(request)}/activity", query: request["query"])
       when "carts/show/endpoint#show"                 then proxy(:get,  "/carts/#{safe_id(request)}")
       when "checkout_sessions/create/endpoint#create" then proxy(:post, "/checkout-sessions/#{safe_id(request)}", body: request["body"])
       when "products/show/endpoint#show"              then proxy(:get,  "/products/#{safe_id(request)}")
       when "orders/show/endpoint#show"                then proxy(:get,  "/orders/#{safe_id(request)}")
+      when "orders/receipt/endpoint#show"             then proxy(:get,  "/orders/#{safe_id(request)}/receipt")
       when "orders/cancel/endpoint#cancel"            then proxy(:post, "/orders/#{safe_id(request)}/cancel", body: request["body"])
       when "accounts/show/endpoint#show"              then proxy(:get,  "/accounts/#{safe_id(request)}")
       when "inventory/show/endpoint#show"             then proxy(:get,  "/inventory/#{safe_id(request)}")
@@ -29,13 +31,18 @@ module OresApp
     end
 
     def health(request)
-      response(200, {
-        ok: true,
-        service: "ores-ror.rb",
-        runtime: HttpDatabase.runtime_name,
-        execution_mode: execution_mode,
-        request_id: request["request_id"]
-      })
+      response(
+        200,
+        {
+          ok: true,
+          service: "ores-ror.rb",
+          request_id: request["request_id"]
+        },
+        headers: {
+          "x-ores-runtime" => HttpDatabase.runtime_name,
+          "x-ores-execution-mode" => execution_mode
+        }
+      )
     end
 
     def execution_mode
@@ -55,10 +62,10 @@ module OresApp
       value
     end
 
-    def response(status, body)
+    def response(status, body, headers: {})
       {
         status: Integer(status),
-        headers: { "content-type" => "application/json; charset=utf-8" },
+        headers: { "content-type" => "application/json; charset=utf-8" }.merge(headers),
         body: body
       }
     end

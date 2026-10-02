@@ -4,10 +4,12 @@ class RoutesTest < ActionDispatch::IntegrationTest
   test "Rails routes are the only endpoint routing source of truth" do
     expected = {
       "user" => ["users/show/endpoint", "show"],
+      "user_activity" => ["users/activity/endpoint", "show"],
       "cart" => ["carts/show/endpoint", "show"],
       "checkout_session" => ["checkout_sessions/create/endpoint", "create"],
       "product" => ["products/show/endpoint", "show"],
       "order" => ["orders/show/endpoint", "show"],
+      "order_receipt" => ["orders/receipt/endpoint", "show"],
       "cancel_order" => ["orders/cancel/endpoint", "cancel"],
       "account" => ["accounts/show/endpoint", "show"],
       "inventory" => ["inventory/show/endpoint", "show"],
@@ -24,10 +26,11 @@ class RoutesTest < ActionDispatch::IntegrationTest
       out[route.name.to_s] = [route.defaults[:controller], route.defaults[:action]]
     end
 
+    assert_operator expected.length, :>=, 15
     assert_equal expected, actual
   end
 
-  test "every endpoint has a conventional app model and json erb view" do
+  test "every endpoint has a conventional app model and json plus html erb views" do
     require Rails.root.join("lib/ores_build/static_routes")
 
     OresBuild::StaticRoutes.new(Rails.root).compile.each do |route|
@@ -35,6 +38,7 @@ class RoutesTest < ActionDispatch::IntegrationTest
       assert route.fetch(:model_file).start_with?("app/models/")
       assert File.file?(Rails.root.join(route.fetch(:model_file))), route.inspect
       assert route.fetch(:view_files).any? { |file| file.start_with?("app/views/") && file.end_with?(".json.erb") }, route.inspect
+      assert route.fetch(:view_files).any? { |file| file.start_with?("app/views/") && file.end_with?(".html.erb") }, route.inspect
     end
   end
 
