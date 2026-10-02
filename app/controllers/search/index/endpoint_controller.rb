@@ -1,4 +1,5 @@
 # frozen_string_literal: true
+# ores-route: GET /search action=index
 
 module Search
   module Index
