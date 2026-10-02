@@ -73,7 +73,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ores-ror-to-lambdas-demo/ores-ror.infra
-          ref: main
+          ref: fix/truffleruby-actionview-nokogiri
           path: .ores-infra
       - name: Prove runtime folders moved out of app repo
         run: |
@@ -169,7 +169,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ores-ror-to-lambdas-demo/ores-ror.infra
-          ref: main
+          ref: fix/truffleruby-actionview-nokogiri
           path: .ores-infra
       - uses: ruby/setup-ruby@v1
         with:
@@ -274,7 +274,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ores-ror-to-lambdas-demo/ores-ror.infra
-          ref: main
+          ref: fix/truffleruby-actionview-nokogiri
           path: .ores-infra
       - name: Prove Lambda runtime is infra-owned
         run: |
@@ -321,7 +321,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: ores-ror-to-lambdas-demo/ores-ror.infra
-          ref: main
+          ref: fix/truffleruby-actionview-nokogiri
           path: .ores-infra
       - uses: ruby/setup-ruby@v1
         with:
