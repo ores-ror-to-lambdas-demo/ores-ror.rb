@@ -30,7 +30,13 @@ module OresApp
       defined?(Rails) && defined?(Async::Semaphore) && ENV.fetch("RAILS_ASYNC_IO", "1") != "0"
     end
 
-    def self.parallel_requests(requests, limit: DEFAULT_ASYNC_FANOUT, async: async_fanout_enabled?)
+    def self.parallel_requests(requests = nil, limit: DEFAULT_ASYNC_FANOUT, async: async_fanout_enabled?, **named_requests)
+      if requests.nil?
+        requests = named_requests
+      elsif !named_requests.empty?
+        raise Error, "pass parallel requests as either one Hash or named request keywords, not both"
+      end
+
       raise Error, "parallel_requests requires a Hash" unless requests.is_a?(Hash)
       raise Error, "parallel request set cannot be empty" if requests.empty?
       raise Error, "parallel request set exceeds #{MAX_PARALLEL_OPERATIONS} operations" if requests.length > MAX_PARALLEL_OPERATIONS
