@@ -60,7 +60,7 @@ jobs:
       - run: ORES_BUILD_TARGET=rails bundle exec rails test
       - name: Audit Puma 8 adaptive concurrency
         run: bundle exec truffleruby script/audit-puma-concurrency.rb
-      - name: Prove Fiber-scheduled Net::HTTP fan-out on one TruffleRuby thread
+      - name: Probe Fiber-scheduled Net::HTTP capability on TruffleRuby
         run: bundle exec truffleruby script/audit-async-net-http.rb
       - name: Boot the normal Rails application on TruffleRuby
         run: |

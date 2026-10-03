@@ -217,7 +217,7 @@ ORES_BUILD_TARGET=rails bundle exec puma -C config/puma.rb config.ru
 
 Rails mode also includes bounded fiber-scheduled fan-out for controllers that have multiple independent outbound operations.
 
-`OresApp::HttpDatabase.parallel_requests` uses Async's Fiber scheduler in Rails mode. The default per-request fan-out limit is 4 and the helper rejects more than 16 operations in one batch. The existing persistent HTTP connection pool remains the transport, so fan-out reuses keep-alive `Net::HTTP` sessions instead of creating one client per operation.
+`OresApp::HttpDatabase.parallel_requests` uses Async's Fiber scheduler in Rails mode **when the Ruby runtime exposes `Fiber.scheduler`**. The default per-request fan-out limit is 4 and the helper rejects more than 16 operations in one batch. The existing persistent HTTP connection pool remains the transport, so fan-out reuses keep-alive `Net::HTTP` sessions instead of creating one client per operation.
 
 The product endpoint is the concrete demo: it requests product data and inventory independently, concurrently in Rails, then renders the combined result. The same controller source runs in generated Lambda/Graal form; when Async is not bundled there, the helper executes the same request set sequentially so application semantics remain identical.
 
@@ -231,3 +231,10 @@ RAILS_ASYNC_FANOUT_LIMIT=4   # 1..8
 ```
 
 CI includes a real socket smoke test where two HTTP responses are withheld until both connections have arrived. The two `Net::HTTP` calls must therefore overlap; CI also asserts both client fibers execute on one Ruby thread with one Fiber scheduler.
+
+
+### Ruby runtime capability
+
+The async path is capability-gated, not engine-name-gated. If `Fiber.scheduler` exists, Rails can use the bounded Async fan-out. If it does not, the same `parallel_requests` call executes the operations sequentially.
+
+The current CI TruffleRuby 34.0.1 image reports Ruby 3.4.9 compatibility but does not expose `Fiber.scheduler`, so its Rails mode currently uses the sequential intra-request fallback. It still uses the same adaptive Puma request pool for cross-request concurrency. No hidden fallback thread pool is created, so the Rails process does not silently exceed the configured request-thread budget.

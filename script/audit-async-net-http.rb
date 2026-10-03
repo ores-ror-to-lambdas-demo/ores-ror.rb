@@ -1,6 +1,11 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+unless Fiber.respond_to?(:scheduler)
+  puts "Fiber.scheduler unavailable on #{RUBY_ENGINE} #{RUBY_VERSION}; async Net::HTTP fan-out disabled, bounded sequential fallback remains active"
+  exit 0
+end
+
 require "async"
 require "net/http"
 require "socket"

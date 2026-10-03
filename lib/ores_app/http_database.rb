@@ -2,7 +2,7 @@
 
 require_relative "json_codec"
 
-if defined?(Rails)
+if defined?(Rails) && Fiber.respond_to?(:scheduler)
   require "async"
   require "async/semaphore"
 end
@@ -27,7 +27,10 @@ module OresApp
     end
 
     def self.async_fanout_enabled?
-      defined?(Rails) && defined?(Async::Semaphore) && ENV.fetch("RAILS_ASYNC_IO", "1") != "0"
+      defined?(Rails) &&
+        Fiber.respond_to?(:scheduler) &&
+        defined?(Async::Semaphore) &&
+        ENV.fetch("RAILS_ASYNC_IO", "1") != "0"
     end
 
     def self.parallel_requests(requests = nil, limit: DEFAULT_ASYNC_FANOUT, async: async_fanout_enabled?, **named_requests)

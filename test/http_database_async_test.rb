@@ -4,6 +4,8 @@ require "test_helper"
 
 class HttpDatabaseAsyncTest < ActiveSupport::TestCase
   test "parallel requests overlap scheduler-aware operations on one Ruby thread" do
+    skip "Fiber scheduler is unavailable on #{RUBY_ENGINE}" unless OresApp::HttpDatabase.async_fanout_enabled?
+
     events = []
     schedulers = []
     thread_ids = []
@@ -38,6 +40,8 @@ class HttpDatabaseAsyncTest < ActiveSupport::TestCase
   end
 
   test "fanout limit bounds active fibers" do
+    skip "Fiber scheduler is unavailable on #{RUBY_ENGINE}" unless OresApp::HttpDatabase.async_fanout_enabled?
+
     active = 0
     peak = 0
 
@@ -58,6 +62,11 @@ class HttpDatabaseAsyncTest < ActiveSupport::TestCase
     end
 
     assert_equal 2, peak
+  end
+
+  test "scheduler capability matches the async fanout switch" do
+    expected = defined?(Rails) && Fiber.respond_to?(:scheduler) && ENV.fetch("RAILS_ASYNC_IO", "1") != "0"
+    assert_equal !!expected, !!OresApp::HttpDatabase.async_fanout_enabled?
   end
 
   test "Rails-free fallback can execute the same request set sequentially" do
