@@ -84,7 +84,20 @@ module RouteContract
         query: request.fetch("query"),
         body: request["body"]
       ).fetch(:body)
-      payload = payload.merge("controller_execution" => "products/show#show") if route.fetch("name") == "product"
+      if route.fetch("name") == "product"
+        product_id = request.fetch("path").sub(%r{\A/products/}, "")
+        inventory = database_response(
+          method: "GET",
+          path: "/inventory/#{product_id}",
+          query: {},
+          body: nil
+        ).fetch(:body)
+
+        payload = payload.merge(
+          "inventory" => inventory,
+          "controller_execution" => "products/show#show"
+        )
+      end
       payload
     end
   end

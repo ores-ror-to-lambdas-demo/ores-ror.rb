@@ -28,11 +28,14 @@ class RuntimeContractTest < ActionDispatch::IntegrationTest
     )
   end
 
-  test "product action custom logic runs directly without dispatch_ores_endpoint" do
+  test "product action fans out independent data reads without bypassing the controller" do
     source = File.read(Rails.root.join("app/controllers/products/show/endpoint_controller.rb"))
     refute_includes source, "dispatch_ores_endpoint"
+    assert_includes source, "parallel_requests"
 
+    calls = []
     mock = lambda do |method, path, body: nil, query: {}|
+      calls << path
       {
         status: 200,
         body: {
@@ -55,8 +58,11 @@ class RuntimeContractTest < ActionDispatch::IntegrationTest
     assert_response :success
     assert_equal "direct", response.headers["x-ores-controller-execution"]
     assert_equal "request_id", response.headers["x-ores-middleware-chain"]
+    assert_equal ["/inventory/demo-product", "/products/demo-product"], calls.sort
+
     payload = JSON.parse(response.body)
     assert_equal "products/show#show", payload.fetch("controller_execution")
     assert_equal "/products/demo-product", payload.fetch("path")
+    assert_equal "/inventory/demo-product", payload.fetch("inventory").fetch("path")
   end
 end

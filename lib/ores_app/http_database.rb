@@ -2,15 +2,99 @@
 
 require_relative "json_codec"
 
+if defined?(Rails) && Fiber.respond_to?(:scheduler)
+  require "async"
+  require "async/semaphore"
+end
+
 module OresApp
   class HttpDatabase
     class Error < StandardError; end
 
     GRAAL_RUNTIME = defined?(ORES_GRAAL_RUNTIME) && ORES_GRAAL_RUNTIME
+    MAX_PARALLEL_OPERATIONS = 16
+    MAX_ASYNC_FANOUT = 8
+    DEFAULT_ASYNC_FANOUT = if defined?(Rails)
+      Integer(ENV.fetch("RAILS_ASYNC_FANOUT_LIMIT", "4"))
+    else
+      1
+    end
+
+    raise Error, "RAILS_ASYNC_FANOUT_LIMIT must be between 1 and #{MAX_ASYNC_FANOUT}" unless DEFAULT_ASYNC_FANOUT.between?(1, MAX_ASYNC_FANOUT)
 
     def self.runtime_name
       GRAAL_RUNTIME ? "truffleruby-graal" : RUBY_ENGINE
     end
+
+    def self.async_fanout_enabled?
+      defined?(Rails) &&
+        Fiber.respond_to?(:scheduler) &&
+        defined?(Async::Semaphore) &&
+        ENV.fetch("RAILS_ASYNC_IO", "1") != "0"
+    end
+
+    def self.parallel_requests(requests = nil, limit: DEFAULT_ASYNC_FANOUT, async: async_fanout_enabled?, **named_requests)
+      if requests.nil?
+        requests = named_requests
+      elsif !named_requests.empty?
+        raise Error, "pass parallel requests as either one Hash or named request keywords, not both"
+      end
+
+      raise Error, "parallel_requests requires a Hash" unless requests.is_a?(Hash)
+      raise Error, "parallel request set cannot be empty" if requests.empty?
+      raise Error, "parallel request set exceeds #{MAX_PARALLEL_OPERATIONS} operations" if requests.length > MAX_PARALLEL_OPERATIONS
+
+      concurrency = Integer(limit)
+      raise Error, "parallel request limit must be between 1 and #{MAX_ASYNC_FANOUT}" unless concurrency.between?(1, MAX_ASYNC_FANOUT)
+
+      entries = requests.map do |name, spec|
+        [name, normalize_request_spec(spec)]
+      end
+
+      unless async && entries.length > 1
+        return entries.each_with_object({}) do |(name, spec), out|
+          out[name] = execute_request_spec(spec)
+        end
+      end
+
+      Sync do |parent|
+        semaphore = Async::Semaphore.new([concurrency, entries.length].min, parent: parent)
+        tasks = entries.map do |name, spec|
+          [name, semaphore.async { execute_request_spec(spec) }]
+        end
+
+        tasks.each_with_object({}) do |(name, task), out|
+          out[name] = task.wait
+        end
+      end
+    end
+
+    def self.normalize_request_spec(spec)
+      raise Error, "parallel request specification must be a Hash" unless spec.is_a?(Hash)
+
+      method = spec[:method] || spec["method"]
+      path = spec[:path] || spec["path"]
+      raise Error, "parallel request method is required" if method.to_s.empty?
+      raise Error, "parallel request path is required" if path.to_s.empty?
+
+      {
+        method: method.to_sym,
+        path: path.to_s,
+        body: spec.key?(:body) ? spec[:body] : spec["body"],
+        query: spec.key?(:query) ? spec[:query] : spec.fetch("query", {})
+      }
+    end
+    private_class_method :normalize_request_spec
+
+    def self.execute_request_spec(spec)
+      request(
+        spec.fetch(:method),
+        spec.fetch(:path),
+        body: spec.fetch(:body),
+        query: spec.fetch(:query) || {}
+      )
+    end
+    private_class_method :execute_request_spec
 
     class GraalTransport
       def self.request(method, path, body:, query:)
