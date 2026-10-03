@@ -8,6 +8,7 @@ gem "connection_pool", "~> 2.5"
 group :rails do
   gem "rails", "~> 8.1"
   gem "puma", "~> 8.0", ">= 8.0.2", require: false
+  gem "async", "~> 2.46"
 end
 
 group :test do

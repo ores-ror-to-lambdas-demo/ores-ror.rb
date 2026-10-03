@@ -24,6 +24,8 @@ jobs:
       - run: ORES_BUILD_TARGET=rails bundle exec rails test
       - name: Audit Puma 8 adaptive concurrency
         run: bundle exec ruby script/audit-puma-concurrency.rb
+      - name: Prove Fiber-scheduled Net::HTTP fan-out on one Ruby thread
+        run: bundle exec ruby script/audit-async-net-http.rb
       - name: Audit app and transitive gem execution-local state
         run: |
           bundle exec ruby script/audit-thread-state.rb app lib config $(bundle list --paths) > thread-state-audit.json
@@ -58,6 +60,8 @@ jobs:
       - run: ORES_BUILD_TARGET=rails bundle exec rails test
       - name: Audit Puma 8 adaptive concurrency
         run: bundle exec truffleruby script/audit-puma-concurrency.rb
+      - name: Prove Fiber-scheduled Net::HTTP fan-out on one TruffleRuby thread
+        run: bundle exec truffleruby script/audit-async-net-http.rb
       - name: Boot the normal Rails application on TruffleRuby
         run: |
           ORES_BUILD_TARGET=rails RAILS_ENV=test PORT=3101 bundle exec puma -C config/puma.rb config.ru >rails-truffle.log 2>&1 &

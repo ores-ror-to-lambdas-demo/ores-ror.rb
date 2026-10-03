@@ -211,3 +211,23 @@ Run Puma directly so the Puma 8 concurrency contract is active:
 ```sh
 ORES_BUILD_TARGET=rails bundle exec puma -C config/puma.rb config.ru
 ```
+
+
+## Rails async I/O fan-out
+
+Rails mode also includes bounded fiber-scheduled fan-out for controllers that have multiple independent outbound operations.
+
+`OresApp::HttpDatabase.parallel_requests` uses Async's Fiber scheduler in Rails mode. The default per-request fan-out limit is 4 and the helper rejects more than 16 operations in one batch. The existing persistent HTTP connection pool remains the transport, so fan-out reuses keep-alive `Net::HTTP` sessions instead of creating one client per operation.
+
+The product endpoint is the concrete demo: it requests product data and inventory independently, concurrently in Rails, then renders the combined result. The same controller source runs in generated Lambda/Graal form; when Async is not bundled there, the helper executes the same request set sequentially so application semantics remain identical.
+
+This does not make Rack itself fiber-multiplex unrelated requests. Puma still owns cross-request scheduling with its adaptive 30–50 thread pool. Async is used **inside a selected controller request** to overlap independent socket waits on fibers sharing that one Puma worker thread.
+
+Tuning:
+
+```sh
+RAILS_ASYNC_IO=1
+RAILS_ASYNC_FANOUT_LIMIT=4   # 1..8
+```
+
+CI includes a real socket smoke test where two HTTP responses are withheld until both connections have arrived. The two `Net::HTTP` calls must therefore overlap; CI also asserts both client fibers execute on one Ruby thread with one Fiber scheduler.
